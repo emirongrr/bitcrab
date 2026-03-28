@@ -1,0 +1,11 @@
+[package]
+name           = "bitcrab-node"
+description    = "Chain state, block validation, UTXO set"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+
+[dependencies]
+bitcrab-common.workspace = true
+thiserror.workspace      = true
+tracing.workspace        = true

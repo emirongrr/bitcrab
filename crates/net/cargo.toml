@@ -1,0 +1,13 @@
+[package]
+name           = "bitcrab-net"
+description    = "Bitcoin P2P wire protocol"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+
+[dependencies]
+bitcrab-common.workspace = true
+tokio.workspace          = true
+bytes.workspace          = true
+thiserror.workspace      = true
+tracing.workspace        = true
