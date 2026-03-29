@@ -1,0 +1,263 @@
+//! Bitcoin block types.
+//!
+//! # Bitcoin Core
+//!
+//! `CBlockHeader`, `CBlock` in `src/primitives/block.h`
+//! Serialization via `SERIALIZE_METHODS` macro.
+//!
+//! We keep serialization as explicit methods — no macros.
+
+use super::{
+    hash::{hash256, BlockHash, Hash256},
+};
+
+/// Block height from genesis. Genesis = height 0.
+///
+/// Bitcoin Core uses plain `int` for height, allowing -1 for "unknown".
+/// We model unknown height as `Option<BlockHeight>` — clearer and safer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+pub struct BlockHeight(pub u32);
+
+impl BlockHeight {
+    /// The genesis block height.
+    pub const GENESIS: Self = Self(0);
+
+    /// One block higher.
+    pub fn next(self) -> Self {
+        Self(self.0.saturating_add(1))
+    }
+
+    /// One block lower. Returns `None` at genesis.
+    pub fn prev(self) -> Option<Self> {
+        self.0.checked_sub(1).map(Self)
+    }
+}
+
+impl std::fmt::Display for BlockHeight {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+/// An 80-byte Bitcoin block header.
+///
+/// Bitcoin Core: `CBlockHeader` in `src/primitives/block.h`
+///
+/// Wire format (all fields little-endian):
+/// ```text
+/// offset  size  field
+/// 0       4     version
+/// 4       32    prev_hash
+/// 36      32    merkle_root
+/// 68      4     time
+/// 72      4     bits
+/// 76      4     nonce
+/// ```
+///
+/// Block hash = hash256(these 80 bytes).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BlockHeader {
+    /// Block version — encodes softfork signals (BIP-9).
+    /// Bitcoin Core: `int32_t nVersion`
+    pub version: i32,
+
+    /// Hash of the previous block header.
+    /// All-zero at genesis.
+    /// Bitcoin Core: `uint256 hashPrevBlock`
+    pub prev_hash: BlockHash,
+
+    /// Merkle root of all transactions.
+    /// Bitcoin Core: `uint256 hashMerkleRoot`
+    pub merkle_root: Hash256,
+
+    /// Unix timestamp. Must be > median of previous 11 blocks (BIP-113).
+    /// Bitcoin Core: `uint32_t nTime`
+    pub time: u32,
+
+    /// Compact proof-of-work target.
+    /// Bitcoin Core: `uint32_t nBits`
+    pub bits: u32,
+
+    /// Proof-of-work nonce.
+    /// Bitcoin Core: `uint32_t nNonce`
+    pub nonce: u32,
+}
+
+impl BlockHeader {
+    /// Serialize to the 80-byte wire format.
+    ///
+    /// Bitcoin Core: `CBlockHeader::Serialize()` via `SERIALIZE_METHODS`
+    pub fn serialize(&self) -> [u8; 80] {
+        let mut buf = [0u8; 80];
+        buf[0..4].copy_from_slice(&self.version.to_le_bytes());
+        buf[4..36].copy_from_slice(self.prev_hash.as_bytes());
+        buf[36..68].copy_from_slice(self.merkle_root.as_bytes());
+        buf[68..72].copy_from_slice(&self.time.to_le_bytes());
+        buf[72..76].copy_from_slice(&self.bits.to_le_bytes());
+        buf[76..80].copy_from_slice(&self.nonce.to_le_bytes());
+        buf
+    }
+
+    /// Deserialize from the 80-byte wire format.
+    pub fn deserialize(buf: &[u8; 80]) -> Self {
+        Self {
+            version:     i32::from_le_bytes(buf[0..4].try_into().unwrap()),
+            prev_hash:   BlockHash::from_bytes(buf[4..36].try_into().unwrap()),
+            merkle_root: Hash256::from_bytes(buf[36..68].try_into().unwrap()),
+            time:        u32::from_le_bytes(buf[68..72].try_into().unwrap()),
+            bits:        u32::from_le_bytes(buf[72..76].try_into().unwrap()),
+            nonce:       u32::from_le_bytes(buf[76..80].try_into().unwrap()),
+        }
+    }
+
+    /// Compute block hash = hash256(serialize(self)).
+    ///
+    /// Bitcoin Core: `CBlockHeader::GetHash()` in `src/primitives/block.h`
+    pub fn block_hash(&self) -> BlockHash {
+        BlockHash::from_bytes(hash256(&self.serialize()))
+    }
+
+    /// Decode the compact `bits` field into a 32-byte big-endian target.
+    ///
+    /// Format: bits[31:24] = exponent, bits[23:0] = mantissa
+    /// Target = mantissa × 256^(exponent - 3)
+    ///
+    /// Bitcoin Core: `arith_uint256::SetCompact()` in `src/arith_uint256.cpp`
+    pub fn target(&self) -> [u8; 32] {
+        let exponent = (self.bits >> 24) as usize;
+        let mantissa = self.bits & 0x007F_FFFF;
+        let mut target = [0u8; 32];
+        if exponent == 0 || exponent > 34 {
+            return target;
+        }
+        let pos = 32usize.saturating_sub(exponent);
+        if pos     < 32 { target[pos]     = ((mantissa >> 16) & 0xFF) as u8; }
+        if pos + 1 < 32 { target[pos + 1] = ((mantissa >>  8) & 0xFF) as u8; }
+        if pos + 2 < 32 { target[pos + 2] = ( mantissa        & 0xFF) as u8; }
+        target
+    }
+
+    /// True if hash < target (valid proof-of-work).
+    ///
+    /// Bitcoin Core: `CheckProofOfWork()` in `src/pow.cpp`
+    pub fn meets_target(&self) -> bool {
+        let mut hash_be = *self.block_hash().as_bytes();
+        hash_be.reverse();
+        hash_be.as_slice() < self.target().as_slice()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Block errors
+// ---------------------------------------------------------------------------
+
+/// Errors from block header validation.
+///
+/// Bitcoin Core: `CheckBlockHeader()` and `ContextualCheckBlockHeader()`
+/// in `src/validation.cpp` — errors carried as strings in `BlockValidationState`.
+/// We use typed variants.
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum BlockError {
+    /// Hash does not meet the proof-of-work target.
+    /// Bitcoin Core: `CheckProofOfWork()` — `src/pow.cpp:12`
+    #[error("proof of work invalid: hash {hash} does not meet target for bits {bits:#010x}")]
+    InsufficientProofOfWork { hash: String, bits: u32 },
+
+    /// `bits` encodes an invalid target (zero, negative, or overflow).
+    /// Bitcoin Core: `GetCompact()` checks in `src/arith_uint256.cpp`
+    #[error("bits {0:#010x} encodes an invalid target")]
+    InvalidBits(u32),
+
+    /// Timestamp is more than 2 hours ahead of network time.
+    /// Bitcoin Core: `MAX_FUTURE_BLOCK_TIME = 7200` — `src/chain.h`
+    #[error(
+        "block time {block_time} is {drift}s ahead of network time \
+         {network_time} (max {max_drift}s)"
+    )]
+    TimestampTooFar {
+        block_time: u32,
+        network_time: u32,
+        drift: u32,
+        max_drift: u32,
+    },
+
+    /// Timestamp not greater than Median Time Past (BIP-113).
+    /// Bitcoin Core: `ContextualCheckBlockHeader()` — `src/validation.cpp`
+    #[error(
+        "block time {block_time} must be greater than median time past {median_time_past}"
+    )]
+    TimestampBelowMedianTimePast {
+        block_time: u32,
+        median_time_past: u32,
+    },
+
+    /// `bits` does not match the required difficulty at this height.
+    /// Bitcoin Core: `GetNextWorkRequired()` comparison
+    #[error(
+        "wrong difficulty at height {height}: got {actual:#010x}, expected {expected:#010x}"
+    )]
+    WrongDifficulty { height: u32, actual: u32, expected: u32 },
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The canonical correctness test.
+    /// These values come from Bitcoin Core's `src/kernel/chainparams.cpp`.
+    /// If this passes, serialize/deserialize and hash256 are correct.
+    #[test]
+    fn genesis_block_hash() {
+        let header = BlockHeader {
+            version: 1,
+            prev_hash: BlockHash::ZERO,
+            merkle_root: Hash256::from_bytes(
+                hex::decode(
+                    "3ba3edfd7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4a",
+                )
+                .unwrap()
+                .try_into()
+                .unwrap(),
+            ),
+            time: 1_231_006_505,
+            bits: 0x1d00_ffff,
+            nonce: 2_083_236_893,
+        };
+        assert_eq!(
+            header.block_hash().to_string(),
+            "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f",
+        );
+    }
+
+    #[test]
+    fn serialize_deserialize_roundtrip() {
+        let h = BlockHeader {
+            version:     2,
+            prev_hash:   BlockHash::from_bytes([0xAB; 32]),
+            merkle_root: Hash256::from_bytes([0xCD; 32]),
+            time:        1_700_000_000,
+            bits:        0x1703_a30c,
+            nonce:       99_999,
+        };
+        assert_eq!(BlockHeader::deserialize(&h.serialize()), h);
+    }
+
+    #[test]
+    fn header_is_exactly_80_bytes() {
+        let h = BlockHeader {
+            version: 1, prev_hash: BlockHash::ZERO, merkle_root: Hash256::ZERO,
+            time: 0, bits: 0, nonce: 0,
+        };
+        assert_eq!(h.serialize().len(), 80);
+    }
+
+    #[test]
+    fn block_height_prev_at_genesis_is_none() {
+        assert!(BlockHeight::GENESIS.prev().is_none());
+        assert_eq!(BlockHeight(1).prev(), Some(BlockHeight::GENESIS));
+    }
+}

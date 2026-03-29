@@ -5,6 +5,9 @@ version.workspace      = true
 edition.workspace      = true
 rust-version.workspace = true
 
+[lib]
+path = "lib.rs"
+
 [dependencies]
 sha2.workspace      = true
 ripemd.workspace    = true

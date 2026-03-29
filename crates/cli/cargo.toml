@@ -6,7 +6,7 @@ rust-version.workspace = true
 
 [[bin]]
 name = "bitcrab"
-path = "src/main.rs"
+path = "main.rs"
 
 [dependencies]
 bitcrab-common.workspace     = true
