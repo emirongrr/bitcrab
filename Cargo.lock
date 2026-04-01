@@ -69,6 +69,7 @@ dependencies = [
  "bitcrab-net",
  "bitcrab-node",
  "clap",
+ "hex",
  "tokio",
  "tracing",
  "tracing-subscriber",

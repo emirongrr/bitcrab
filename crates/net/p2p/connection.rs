@@ -23,7 +23,7 @@ use super::{
     errors::P2pError,
     message::{Command, Magic, VersionMessage},
 };
-
+use bitcrab_common::types::hash::BlockHash;
 /// A connected peer with a completed handshake.
 pub struct Connection {
     pub stream:       TcpStream,
@@ -32,7 +32,61 @@ pub struct Connection {
     pub peer_agent:   String,
     pub peer_height:  i32,
 }
+impl Connection {
+    /// Send getheaders and receive up to 2000 headers.
+    ///
+    /// `locator` — block hashes we already have (most recent first).
+    /// Pass `&[BlockHash::ZERO]` or signet genesis to start from the beginning.
+    ///
+    /// Bitcoin Core: `SendMessages()` → `getheaders` in src/net_processing.cpp
+    pub async fn get_headers(
+        &mut self,
+        locator: &[BlockHash],
+    ) -> Result<Vec<bitcrab_common::types::block::BlockHeader>, P2pError> {
+        use crate::p2p::codec::{
+            decode_headers, encode_getheaders, encode_header, decode_header, verify_checksum,
+        };
+        use bitcrab_common::types::block::BlockHeader;
 
+        let stop_hash = BlockHash::ZERO; // get as many as possible
+
+        let payload = encode_getheaders(70015, locator, &stop_hash);
+        let header  = encode_header(self.magic, &Command::GetHeaders, &payload);
+
+        self.stream.write_all(&header).await?;
+        self.stream.write_all(&payload).await?;
+        debug!("sent getheaders with {} locator hashes", locator.len());
+
+        // Wait for headers response (ignore other messages)
+        loop {
+            let mut hdr_buf = [0u8; 24];
+            self.stream.read_exact(&mut hdr_buf).await?;
+            let msg_hdr = decode_header(&hdr_buf, self.magic)?;
+
+            let mut msg_payload = vec![0u8; msg_hdr.length as usize];
+            if msg_hdr.length > 0 {
+                self.stream.read_exact(&mut msg_payload).await?;
+            }
+            verify_checksum(&msg_hdr, &msg_payload)?;
+
+            match msg_hdr.command {
+                Command::Headers => {
+                    let raw_headers = decode_headers(&msg_payload)?;
+                    let count = raw_headers.len();
+                    let parsed: Vec<BlockHeader> = raw_headers
+                        .into_iter()
+                        .map(|b| BlockHeader::deserialize(&b))
+                        .collect();
+                    info!("received {} headers", count);
+                    return Ok(parsed);
+                }
+                other => {
+                    debug!("ignoring {:?} while waiting for headers", other);
+                }
+            }
+        }
+    }
+}
 /// Connect to a peer and complete the Bitcoin handshake.
 ///
 /// Returns a `Connection` ready to send/receive messages.

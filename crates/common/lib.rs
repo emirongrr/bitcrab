@@ -1,4 +1,5 @@
 pub mod types;
+pub mod wire;
 
 pub use types::amount::Amount;
 pub use types::block::{BlockHeader, BlockHeight};
