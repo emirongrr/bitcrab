@@ -1,10 +1,15 @@
 //! Headers message — response to getheaders.
 //!
-//! Each entry: 80-byte header + 0x00 (empty tx count varint).
-//! Bitcoin Core: MAX_HEADERS_RESULTS = 2000
+//! Bitcoin Core: NetMsgType::HEADERS in src/protocol.h
+//! Each entry: 80-byte header + 0x00 varint (empty tx count).
+//!
+//! Bitcoin Core: MAX_HEADERS_RESULTS = 2000 in src/net_processing.cpp
 
-use bitcrab_common::types::block::BlockHeader;
-use crate::p2p::{message::Command, wire::{DecodeError, Decoder, Encoder}};
+use bitcrab_common::{
+    types::block::BlockHeader,
+    wire::{Decoder, Encoder, encode::VarInt, error::DecodeError},
+};
+use crate::p2p::message::Command;
 use super::BitcoinMessage;
 
 #[derive(Debug, Clone)]
@@ -16,23 +21,25 @@ impl BitcoinMessage for Headers {
     const COMMAND: Command = Command::Headers;
 
     fn encode(&self) -> Vec<u8> {
-        let mut enc = Encoder::new().write_varint(self.headers.len() as u64);
+        let mut enc = Encoder::new()
+            .encode_field(&VarInt(self.headers.len() as u64));
         for h in &self.headers {
-            enc = enc.write_bytes(&h.serialize()).write_u8(0x00);
+            // 80 bytes + 0x00 tx count
+            enc = enc.encode_field(&h.serialize()).encode_field(&0u8);
         }
         enc.finish()
     }
 
-    fn decode(p: &[u8]) -> Result<Self, DecodeError> {
-        if p.is_empty() {
+    fn decode(payload: &[u8]) -> Result<Self, DecodeError> {
+        if payload.is_empty() {
             return Ok(Self { headers: vec![] });
         }
-        let dec = Decoder::new(p);
+        let dec = Decoder::new(payload);
         let (count, mut dec) = dec.read_varint("header_count")?;
         let mut headers = Vec::with_capacity(count as usize);
         for _ in 0..count {
-            let (raw, d) = dec.read_array::<80>("header")?;
-            let (_tx_count, d) = d.read_u8("tx_count")?;
+            let (raw, d)      = dec.read_array::<80>("header")?;
+            let (_tx_count, d) = d.decode_field::<u8>("tx_count")?;
             headers.push(BlockHeader::deserialize(&raw));
             dec = d;
         }

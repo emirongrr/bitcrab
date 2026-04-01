@@ -10,13 +10,14 @@ pub mod ping;
 pub mod verack;
 pub mod version;
 
+use bitcrab_common::wire::DecodeError;
 pub use getheaders::GetHeaders;
 pub use headers::Headers;
 pub use ping::{Ping, Pong};
 pub use verack::Verack;
 pub use version::Version;
 
-use crate::p2p::{message::Command, wire::DecodeError};
+use crate::p2p::{message::Command};
 
 /// A Bitcoin P2P message.
 ///

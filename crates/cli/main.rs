@@ -77,8 +77,8 @@ async fn main() {
                 }
             };
 
-            match conn.get_headers(&locator).await {
-                Ok(headers) => {
+                match conn.get_headers(locator).await {
+                    Ok(headers) => {
                     info!("got {} headers", headers.len());
                     if let Some(first) = headers.first() {
                         info!(

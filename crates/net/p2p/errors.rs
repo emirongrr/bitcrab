@@ -47,4 +47,8 @@ pub enum P2pError {
     /// IO error from the underlying TCP stream.
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
+
+    /// Message decode failed.
+    #[error("decode error: {0}")]
+    DecodeError(String),
 }

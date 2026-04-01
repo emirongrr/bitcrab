@@ -1,4 +1,9 @@
-use crate::p2p::{message::Command, wire::DecodeError};
+//! Verack — acknowledges a version message. Zero-byte payload.
+//!
+//! Bitcoin Core: NetMsgType::VERACK in src/protocol.h
+
+use bitcrab_common::wire::error::DecodeError;
+use crate::p2p::message::Command;
 use super::BitcoinMessage;
 
 #[derive(Debug, Clone)]

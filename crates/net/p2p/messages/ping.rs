@@ -1,4 +1,10 @@
-use crate::p2p::{message::Command, wire::{DecodeError, Decoder, Encoder}};
+//! Ping and Pong messages — keepalive with nonce echo.
+//!
+//! Bitcoin Core: NetMsgType::PING / PONG in src/protocol.h
+//! Both carry a single u64 nonce. Pong echoes the ping nonce.
+
+use bitcrab_common::wire::{Decoder, Encoder, error::DecodeError};
+use crate::p2p::message::Command;
 use super::BitcoinMessage;
 
 #[derive(Debug, Clone)]
@@ -11,12 +17,12 @@ impl BitcoinMessage for Ping {
     const COMMAND: Command = Command::Ping;
 
     fn encode(&self) -> Vec<u8> {
-        Encoder::new().write_u64_le(self.nonce).finish()
+        Encoder::new().encode_field(&self.nonce).finish()
     }
 
-    fn decode(p: &[u8]) -> Result<Self, DecodeError> {
-        let (nonce, dec) = Decoder::new(p).read_u64_le("nonce")?;
-        dec.finish()?;
+    fn decode(payload: &[u8]) -> Result<Self, DecodeError> {
+        let (nonce, dec) = Decoder::new(payload).decode_field("nonce")?;
+        dec.finish("ping")?;
         Ok(Self { nonce })
     }
 }
@@ -25,12 +31,12 @@ impl BitcoinMessage for Pong {
     const COMMAND: Command = Command::Pong;
 
     fn encode(&self) -> Vec<u8> {
-        Encoder::new().write_u64_le(self.nonce).finish()
+        Encoder::new().encode_field(&self.nonce).finish()
     }
 
-    fn decode(p: &[u8]) -> Result<Self, DecodeError> {
-        let (nonce, dec) = Decoder::new(p).read_u64_le("nonce")?;
-        dec.finish()?;
+    fn decode(payload: &[u8]) -> Result<Self, DecodeError> {
+        let (nonce, dec) = Decoder::new(payload).decode_field("nonce")?;
+        dec.finish("pong")?;
         Ok(Self { nonce })
     }
 }
