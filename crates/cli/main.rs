@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use tracing::info;
+use tracing::{debug, info};
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]
@@ -16,8 +16,13 @@ enum Commands {
         #[arg(default_value = "seed.signet.bitcoin.sprovoost.nl:38333")]
         addr: String,
     },
-    /// Download headers from signet peer
+    /// Download first 2000 headers from signet peer
     Headers {
+        #[arg(default_value = "seed.signet.bitcoin.sprovoost.nl:38333")]
+        addr: String,
+    },
+    /// Download all headers until tip
+    AllHeaders {
         #[arg(default_value = "seed.signet.bitcoin.sprovoost.nl:38333")]
         addr: String,
     },
@@ -38,11 +43,13 @@ async fn main() {
     match cli.command {
         Commands::Connect { addr } => {
             use bitcrab_net::p2p::{connection::connect, message::Magic};
+
             match connect(&addr, Magic::Signet).await {
-                Ok(conn) => {
+                Ok(manager) => {
+                    let peer = &manager.peers()[0];
                     info!(
-                        "handshake complete — peer v{} '{}' height {}",
-                        conn.peer_version, conn.peer_agent, conn.peer_height
+                        "connected: {} v{} '{}' height={}",
+                        peer.addr, peer.version, peer.user_agent, peer.start_height
                     );
                 }
                 Err(e) => {
@@ -54,52 +61,88 @@ async fn main() {
 
         Commands::Headers { addr } => {
             use bitcrab_common::types::hash::BlockHash;
-            use bitcrab_net::p2p::{connection::connect, message::Magic};
-
-            // Signet genesis block hash.
-            // Source: Bitcoin Core src/kernel/chainparams.cpp
-            //
-            // Display order (block explorers):
-            //   0000013d4fef2d72d18ac33a8d0d6b2a8bd5f6c46a3f8c8a4e41c50fb337a3c
-            //
-            // We pass ZERO as the locator — this tells the peer to send headers
-            // from the very beginning (genesis). Bitcoin Core behavior:
-            // if locator hash is unknown, peer starts from genesis.
-            //
-            // Bitcoin Core: net_processing.cpp `ProcessGetHeaders()`
-            let locator = vec![BlockHash::ZERO];
-
-            let mut conn = match connect(&addr, Magic::Signet).await {
-                Ok(c) => c,
-                Err(e) => {
-                    eprintln!("connect error: {}", e);
-                    std::process::exit(1);
-                }
+            use bitcrab_net::p2p::{
+                connection::connect,
+                message::Magic,
+                messages::{Message, getheaders::GetHeaders},
             };
 
-                match conn.get_headers(locator).await {
-                    Ok(headers) => {
-                    info!("got {} headers", headers.len());
-                    if let Some(first) = headers.first() {
-                        info!(
-                            "first: hash={} time={} bits={:#010x}",
-                            first.block_hash(),
-                            first.time,
-                            first.bits
-                        );
+            let mut manager = match connect(&addr, Magic::Signet).await {
+                Ok(m) => m,
+                Err(e) => { eprintln!("connect error: {}", e); std::process::exit(1); }
+            };
+
+            let peer = manager.peer_mut(0).unwrap();
+            let msg  = GetHeaders::from_tip(BlockHash::ZERO);
+            peer.send(&msg).await.unwrap();
+
+            loop {
+                match peer.recv_timeout(30).await {
+                    Ok(Message::Headers(h)) => {
+                        info!("got {} headers", h.headers.len());
+                        if let Some(first) = h.headers.first() {
+                            info!("first: hash={} time={} bits={:#010x}",
+                                first.block_hash(), first.time, first.bits);
+                        }
+                        if let Some(last) = h.headers.last() {
+                            info!("last:  hash={} time={} bits={:#010x}",
+                                last.block_hash(), last.time, last.bits);
+                        }
+                        break;
                     }
-                    if let Some(last) = headers.last() {
-                        info!(
-                            "last:  hash={} time={} bits={:#010x}",
-                            last.block_hash(),
-                            last.time,
-                            last.bits
-                        );
-                    }
+                    Ok(other) => debug!("ignoring {}", other),
+                    Err(e) => { eprintln!("recv error: {}", e); break; }
                 }
-                Err(e) => {
-                    eprintln!("headers error: {}", e);
-                    std::process::exit(1);
+            }
+        }
+
+        Commands::AllHeaders { addr } => {
+            use bitcrab_common::types::{hash::BlockHash, block::BlockHeader};
+            use bitcrab_net::p2p::{
+                connection::connect,
+                message::Magic,
+                messages::{ Message, getheaders::GetHeaders},
+            };
+
+            let mut manager = match connect(&addr, Magic::Signet).await {
+                Ok(m) => m,
+                Err(e) => { eprintln!("connect error: {}", e); std::process::exit(1); }
+            };
+
+            let peer = manager.peer_mut(0).unwrap();
+            let mut all_headers: Vec<BlockHeader> = Vec::new();
+            let mut tip = BlockHash::ZERO;
+
+            loop {
+                let msg = GetHeaders::from_tip(tip);
+                peer.send(&msg).await.unwrap();
+
+                let batch = loop {
+                    match peer.recv_timeout(30).await {
+                        Ok(Message::Headers(h)) => break h.headers,
+                        Ok(other) => debug!("ignoring {}", other),
+                        Err(e) => {
+                            eprintln!("recv error: {}", e);
+                            std::process::exit(1);
+                        }
+                    }
+                };
+
+                let count = batch.len();
+                if count == 0 {
+                    info!("sync complete — {} headers total", all_headers.len());
+                    break;
+                }
+
+                tip = batch.last().unwrap().block_hash();
+                all_headers.extend(batch);
+                info!("downloaded {} headers, tip={}", all_headers.len(), tip);
+
+                // Bitcoin Core sends max 2000 per response.
+                // If we got fewer, we have reached the tip.
+                if count < 2000 {
+                    info!("sync complete — {} headers total", all_headers.len());
+                    break;
                 }
             }
         }

@@ -124,36 +124,55 @@ mod wire_tests {
     /// 01 — relay: true
     #[test]
     fn version_payload_decode_known_vector() {
-        // Real version payload captured from a Bitcoin mainnet node
-        // Source: learnmeabitcoin.com/technical/networking
-        let payload = hex::decode(concat!(
-            "7E110100",                     // version = 70014
-            "0500000000000000",             // services = 5 (NODE_NETWORK | NODE_BLOOM)
-            "C515CF6100000000",             // timestamp = 1641167301
-            "0000000000000000",             // recv_services
-            "00000000000000000000FFFF2E13894A", // recv_addr
-            "208D",                         // recv_port = 8333
-            "0500000000000000",             // from_services
-            "00000000000000000000FFFF7F000001", // from_addr = 127.0.0.1
-            "208D",                         // from_port = 8333
-            "0000000000000000",             // nonce
-            "10",                           // user_agent length = 16
-            "2F5361746F7368693A302E31322E31",// "/Satoshi:0.12.1"
-            "28626974636F7265292F",         // "(bitcoin)/"  (16 total bytes)
-            "C8FB0B00",                     // start_height = 720840
-            "01"                            // relay = true
-        )).unwrap();
+        // Minimal but complete version payload, hand-crafted and verified byte by byte.
+        // Source: Bitcoin Wiki Protocol documentation field layout.
+        //
+        // version(4LE) services(8LE) timestamp(8LE)
+        // recv_services(8) recv_addr(16) recv_port(2BE)
+        // from_services(8) from_addr(16) from_port(2BE)
+        // nonce(8) user_agent(varint+str) start_height(4LE) relay(1)
+
+        let mut payload = Vec::new();
+
+        // version = 70015 = 0x0001117F
+        payload.extend_from_slice(&70015i32.to_le_bytes());
+        // services = 9 (NODE_NETWORK | NODE_WITNESS)
+        payload.extend_from_slice(&9u64.to_le_bytes());
+        // timestamp = 1700000000
+        payload.extend_from_slice(&1700000000i64.to_le_bytes());
+        // recv_services
+        payload.extend_from_slice(&0u64.to_le_bytes());
+        // recv_addr (16 bytes, IPv4-mapped 127.0.0.1 = 00..00 FF FF 7F 00 00 01)
+        payload.extend_from_slice(&[0,0,0,0, 0,0,0,0, 0,0, 0xFF,0xFF, 127,0,0,1]);
+        // recv_port = 8333 big-endian = 0x208D
+        payload.extend_from_slice(&8333u16.to_be_bytes());
+        // from_services
+        payload.extend_from_slice(&9u64.to_le_bytes());
+        // from_addr
+        payload.extend_from_slice(&[0u8; 16]);
+        // from_port = 0
+        payload.extend_from_slice(&0u16.to_be_bytes());
+        // nonce
+        payload.extend_from_slice(&0xDEADBEEFu64.to_le_bytes());
+        // user_agent = "/bitcrab:0.1.0/" (15 bytes)
+        let ua = b"/bitcrab:0.1.0/";
+        payload.push(ua.len() as u8); // varint = 15 = 0x0F
+        payload.extend_from_slice(ua);
+        // start_height = 297000
+        payload.extend_from_slice(&297000i32.to_le_bytes());
+        // relay = true
+        payload.push(1u8);
 
         let v = Version::decode(&payload).unwrap();
 
-        assert_eq!(v.version, 70014);
-        assert_eq!(v.services, 5);
-        assert_eq!(v.recv_port, 8333);
-        assert_eq!(v.from_port, 8333);
-        assert_eq!(v.relay, true);
-        assert!(v.user_agent.contains("Satoshi"));
-        // start_height
-        assert_eq!(v.start_height, 720840);
+        assert_eq!(v.version,      70015);
+        assert_eq!(v.services,     9);
+        assert_eq!(v.recv_port,    8333);
+        assert_eq!(v.from_port,    0);
+        assert_eq!(v.nonce,        0xDEADBEEF);
+        assert_eq!(v.user_agent,   "/bitcrab:0.1.0/");
+        assert_eq!(v.start_height, 297000);
+        assert_eq!(v.relay,        true);
     }
 
     /// Version encode-decode roundtrip — fields survive the round trip.
@@ -252,7 +271,7 @@ mod wire_tests {
 
         let header: MessageHeader = decode_header(&header_bytes, Magic::Mainnet).unwrap();
         // Checksum in header must match hash256(payload)[0..4]
-        let result = verify_checksum(&header, payload);
+        let _result = verify_checksum(&header, payload);
         // Note: this specific capture may have a different payload length
         // The important assertion is checksum() logic is correct
         assert_eq!(checksum(b""), [0x5D, 0xF6, 0xE0, 0xE2]); // always valid

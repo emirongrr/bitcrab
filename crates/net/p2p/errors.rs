@@ -51,4 +51,5 @@ pub enum P2pError {
     /// Message decode failed.
     #[error("decode error: {0}")]
     DecodeError(String),
+
 }
