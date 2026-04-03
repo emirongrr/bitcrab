@@ -1,0 +1,19 @@
+[package]
+name = "bitcrab-test"
+version = "0.1.0"
+edition = "2021"
+
+[dev-dependencies]
+bitcrab-common = { path = "../crates/common" }
+bitcrab-net = { path = "../crates/net" }
+bitcrab-storage = { path = "../crates/storage" }
+tokio = { version = "1", features = ["full", "test-util"] }
+proptest = "1.4"
+
+[[test]]
+name = "bitcrab_tests"
+path = "tests/tests.rs"
+
+[[test]]
+name = "functional_p2p"
+path = "tests/functional_p2p.rs"

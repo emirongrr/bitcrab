@@ -42,7 +42,12 @@ impl Version {
     /// NODE_NETWORK(1) | NODE_WITNESS(8)
     /// Bitcoin Core: src/net.h
     pub const SERVICES: u64 = 0x09;
-
+    
+    pub fn our_version_with_nonce(nonce: u64) -> Self {
+        let mut v = Self::our_version();
+        v.nonce = nonce;
+        v
+    }
     pub fn our_version() -> Self {
         Self {
             version:       Self::PROTOCOL_VERSION,

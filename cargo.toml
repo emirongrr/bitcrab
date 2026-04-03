@@ -5,6 +5,8 @@ members = [
     "crates/net",
     "crates/node",
     "crates/cli",
+    "crates/storage",
+    "test"
 ]
 default-members = ["crates/cli"]
 
@@ -19,6 +21,7 @@ license      = "MIT"
 bitcrab-common = { path = "crates/common" }
 bitcrab-net    = { path = "crates/net" }
 bitcrab-node   = { path = "crates/node" }
+bitcrab-storage= { path = "crates/storage" }
 
 # External — all versions pinned
 sha2               = "0.10.8"

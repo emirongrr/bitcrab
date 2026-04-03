@@ -70,25 +70,3 @@ pub fn verify_checksum(header: &MessageHeader, payload: &[u8]) -> Result<(), P2p
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn header_roundtrip() {
-        let payload = b"hello";
-        let encoded = encode_header(Magic::Signet, &Command::Ping, payload);
-        let decoded  = decode_header(&encoded, Magic::Signet).unwrap();
-        assert_eq!(decoded.command, Command::Ping);
-        assert_eq!(decoded.length, 5);
-    }
-
-    #[test]
-    fn wrong_magic_rejected() {
-        let encoded = encode_header(Magic::Mainnet, &Command::Verack, b"");
-        assert!(matches!(
-            decode_header(&encoded, Magic::Signet),
-            Err(P2pError::WrongMagic { .. })
-        ));
-    }
-}

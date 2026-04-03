@@ -1,6 +1,7 @@
 use clap::{Parser, Subcommand};
 use tracing::{debug, info};
 use tracing_subscriber::EnvFilter;
+use bitcrab_net::p2p::message::Magic;
 
 #[derive(Parser)]
 #[command(name = "bitcrab", version, about = "Minimal Bitcoin full node")]
@@ -8,7 +9,11 @@ struct Cli {
     #[command(subcommand)]
     command: Commands,
 }
-
+#[derive(clap::ValueEnum, Clone)]
+enum NetworkChoice {
+    Signet,
+    Mainnet,
+}
 #[derive(Subcommand)]
 enum Commands {
     /// Connect to a signet peer and complete handshake
@@ -26,6 +31,11 @@ enum Commands {
         #[arg(default_value = "seed.signet.bitcoin.sprovoost.nl:38333")]
         addr: String,
     },
+    /// Start the P2P network and maintain connections
+    StartNetwork {
+        #[arg(value_enum, default_value = "signet")]
+        network: NetworkChoice,
+    },
 }
 
 #[tokio::main]
@@ -41,12 +51,30 @@ async fn main() {
     let cli = Cli::parse();
 
     match cli.command {
+        Commands::StartNetwork { network } => {
+            println!("DEBUG: CLI entered StartNetwork");
+            use bitcrab_net::p2p::network::{NetworkConfig, start_network};
+
+            let config = match network {
+                NetworkChoice::Signet  => NetworkConfig::signet(),
+                NetworkChoice::Mainnet => NetworkConfig::mainnet(),
+            };
+
+            info!("starting {} network", match config.magic {
+                Magic::Signet => "signet",
+                _             => "mainnet",
+            });
+
+            if let Err(e) = start_network(config).await {
+                eprintln!("network error: {}", e);
+                std::process::exit(1);
+            }
+        }
         Commands::Connect { addr } => {
             use bitcrab_net::p2p::{connection::connect, message::Magic};
 
             match connect(&addr, Magic::Signet).await {
-                Ok(manager) => {
-                    let peer = &manager.peers()[0];
+                Ok((_manager, peer, _rx)) => {
                     info!(
                         "connected: {} v{} '{}' height={}",
                         peer.addr, peer.version, peer.user_agent, peer.start_height
@@ -67,18 +95,17 @@ async fn main() {
                 messages::{Message, getheaders::GetHeaders},
             };
 
-            let mut manager = match connect(&addr, Magic::Signet).await {
+            let (_manager, peer, mut rx) = match connect(&addr, Magic::Signet).await {
                 Ok(m) => m,
                 Err(e) => { eprintln!("connect error: {}", e); std::process::exit(1); }
             };
 
-            let peer = manager.peer_mut(0).unwrap();
             let msg  = GetHeaders::from_tip(BlockHash::ZERO);
-            peer.send(&msg).await.unwrap();
+            peer.send(&msg).unwrap();
 
             loop {
-                match peer.recv_timeout(30).await {
-                    Ok(Message::Headers(h)) => {
+                match tokio::time::timeout(tokio::time::Duration::from_secs(30), rx.recv()).await {
+                    Ok(Some(Message::Headers(h))) => {
                         info!("got {} headers", h.headers.len());
                         if let Some(first) = h.headers.first() {
                             info!("first: hash={} time={} bits={:#010x}",
@@ -90,8 +117,9 @@ async fn main() {
                         }
                         break;
                     }
-                    Ok(other) => debug!("ignoring {}", other),
-                    Err(e) => { eprintln!("recv error: {}", e); break; }
+                    Ok(Some(other)) => debug!("ignoring {}", other),
+                    Ok(None) => { eprintln!("peer disconnected"); break; }
+                    Err(e) => { eprintln!("recv timeout: {}", e); break; }
                 }
             }
         }
@@ -104,25 +132,28 @@ async fn main() {
                 messages::{ Message, getheaders::GetHeaders},
             };
 
-            let mut manager = match connect(&addr, Magic::Signet).await {
+            let (_manager, peer, mut rx) = match connect(&addr, Magic::Signet).await {
                 Ok(m) => m,
                 Err(e) => { eprintln!("connect error: {}", e); std::process::exit(1); }
             };
 
-            let peer = manager.peer_mut(0).unwrap();
             let mut all_headers: Vec<BlockHeader> = Vec::new();
             let mut tip = BlockHash::ZERO;
 
             loop {
                 let msg = GetHeaders::from_tip(tip);
-                peer.send(&msg).await.unwrap();
+                peer.send(&msg).unwrap();
 
                 let batch = loop {
-                    match peer.recv_timeout(30).await {
-                        Ok(Message::Headers(h)) => break h.headers,
-                        Ok(other) => debug!("ignoring {}", other),
+                    match tokio::time::timeout(tokio::time::Duration::from_secs(30), rx.recv()).await {
+                        Ok(Some(Message::Headers(h))) => break h.headers,
+                        Ok(Some(other)) => debug!("ignoring {}", other),
+                        Ok(None) => {
+                            eprintln!("peer disconnected");
+                            std::process::exit(1);
+                        }
                         Err(e) => {
-                            eprintln!("recv error: {}", e);
+                            eprintln!("recv timeout: {}", e);
                             std::process::exit(1);
                         }
                     }

@@ -9,6 +9,7 @@ pub mod headers;
 pub mod ping;
 pub mod verack;
 pub mod version;
+pub mod addr;
 
 use bitcrab_common::wire::DecodeError;
 pub use getheaders::GetHeaders;
@@ -16,6 +17,7 @@ pub use headers::Headers;
 pub use ping::{Ping, Pong};
 pub use verack::Verack;
 pub use version::Version;
+pub use addr::{Addr, GetAddr, NetAddr};
 
 use crate::p2p::{message::Command};
 
@@ -46,6 +48,8 @@ pub enum Message {
     Pong(Pong),
     GetHeaders(GetHeaders),
     Headers(Headers),
+    Addr(Addr),
+    GetAddr(GetAddr),
     /// Received a known command we don't handle yet.
     Ignored(Command),
     /// Received an unknown command.
@@ -63,6 +67,8 @@ impl Message {
             Command::Pong        => Ok(Self::Pong(Pong::decode(payload)?)),
             Command::GetHeaders  => Ok(Self::GetHeaders(GetHeaders::decode(payload)?)),
             Command::Headers     => Ok(Self::Headers(Headers::decode(payload)?)),
+            Command::Addr        => Ok(Self::Addr(Addr::decode(payload)?)),
+            Command::GetAddr     => Ok(Self::GetAddr(GetAddr::decode(payload)?)),
             other                => Ok(Self::Ignored(other.clone())),
         }
     }
@@ -77,6 +83,8 @@ impl std::fmt::Display for Message {
             Self::Pong(_)       => write!(f, "pong"),
             Self::GetHeaders(_) => write!(f, "getheaders"),
             Self::Headers(_)    => write!(f, "headers"),
+            Self::Addr(_)       => write!(f, "addr"),
+            Self::GetAddr(_)    => write!(f, "getaddr"),
             Self::Ignored(c)    => write!(f, "ignored({:?})", c),
             Self::Unknown(s)    => write!(f, "unknown({})", s),
         }

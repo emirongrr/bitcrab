@@ -1,0 +1,14 @@
+[package]
+name = "bitcrab-storage"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "lib.rs"
+
+[dependencies]
+rustc-hash = "1.1.0"
+tracing = "0.1"
+thiserror = "1.0"
+rocksdb = "0.22.0"
+bitcrab-common = { path = "../common" }

@@ -3,7 +3,10 @@ pub mod connection;
 pub mod errors;
 pub mod message;
 pub mod messages;
+pub mod network;
 pub mod peer;
+pub mod sync;
 pub mod peer_manager;
+pub mod addr_man;
 #[cfg(test)]
 mod tests;

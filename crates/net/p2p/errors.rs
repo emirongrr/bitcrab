@@ -52,4 +52,13 @@ pub enum P2pError {
     #[error("decode error: {0}")]
     DecodeError(String),
 
+    /// Detected a connection to ourselves via nonce matching.
+    ///
+    /// Bitcoin Core: nonce check in src/net.cpp
+    #[error("self-connection detected — disconnecting")]
+    SelfConnection,
+
+    /// Peer is banned due to misbehavior.
+    #[error("peer is banned")]
+    Banned,
 }
