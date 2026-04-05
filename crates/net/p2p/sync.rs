@@ -27,7 +27,6 @@ impl SyncError {
     }
 }
 
-/// Modus Operandi for P2P Syncing
 #[derive(Debug, PartialEq, Clone, Default)]
 pub enum SyncMode {
     #[default]
@@ -38,6 +37,7 @@ pub enum SyncMode {
 pub struct SyncManager {
     /// In flight requests: Block hash -> (Peer Socket, Requested At)
     in_flight: Arc<Mutex<HashMap<[u8; 32], (SocketAddr, Instant)>>>,
+    #[allow(dead_code)]
     storage: Arc<dyn StorageBackend>,
     peer_manager: Arc<PeerManager>,
     pub mode: Arc<Mutex<SyncMode>>,

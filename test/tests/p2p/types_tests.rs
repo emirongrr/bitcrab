@@ -1,6 +1,6 @@
 use bitcrab_net::p2p::codec::{decode_header, encode_header, verify_checksum};
 use bitcrab_net::p2p::message::{Command, Magic};
-use bitcrab_net::p2p::messages::{version::Version, verack::Verack, Message};
+use bitcrab_net::p2p::messages::Message;
 use proptest::prelude::*;
 
 /// All valid Magic variants for proptest.

@@ -1,7 +1,5 @@
-use bitcrab_net::p2p::connection;
 use bitcrab_net::p2p::message::Magic;
 use bitcrab_storage::InMemoryBackend;
-use bitcrab_net::p2p::sync::SyncManager;
 use bitcrab_net::p2p::peer_manager::PeerManager;
 use std::sync::Arc;
 use tokio::net::TcpListener;
@@ -35,7 +33,7 @@ async fn test_mock_node_strict_drop() {
     });
 
     // 2. Start Bitcrab manager and connect to the mock
-    let storage = Arc::new(InMemoryBackend::open().unwrap());
+    let _storage = Arc::new(InMemoryBackend::open().unwrap());
     let peer_manager = Arc::new(PeerManager::new(magic));
     
     let res = peer_manager.connect_addr(local_addr).await;

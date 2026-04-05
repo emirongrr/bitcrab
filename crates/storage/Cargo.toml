@@ -10,5 +10,10 @@ path = "lib.rs"
 rustc-hash = "1.1.0"
 tracing = "0.1"
 thiserror = "1.0"
-rocksdb = "0.22.0"
+rocksdb = { version = "0.22.0", optional = true }
 bitcrab-common = { path = "../common" }
+paste = "1.0"
+
+[features]
+default = []
+rocksdb = ["dep:rocksdb"]

@@ -1,2 +1,2 @@
-use bitcrab_net::p2p::codec::*;
-use bitcrab_net::p2p::message::*;
+// Empty test module - actual codec tests in types_tests.rs
+// This module is retained for structural organization

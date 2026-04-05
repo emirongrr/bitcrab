@@ -42,7 +42,7 @@ async fn test_handshake_flow_success() {
     });
 
     // Node configuration
-    let storage = Arc::new(InMemoryBackend::open().unwrap());
+    let _storage = Arc::new(InMemoryBackend::open().unwrap());
     let peer_manager = Arc::new(PeerManager::new(magic));
 
     // Outbound Connect and Handshake

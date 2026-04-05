@@ -32,11 +32,13 @@ impl MockPeer {
     }
 
     /// Send maliciously crafted / raw garbage bytes directly to the wire
+    #[allow(dead_code)]
     pub async fn send_raw(&mut self, garbage: &[u8]) {
         self.stream.write_all(garbage).await.expect("MockPeer failed to send raw bytes");
     }
 
     /// Read raw bytes from the wire until timeout
+    #[allow(dead_code)]
     pub async fn read_raw(&mut self, size: usize, wait: Duration) -> Result<Vec<u8>, std::io::Error> {
         let mut buf = vec![0u8; size];
         match timeout(wait, self.stream.read_exact(&mut buf)).await {
@@ -62,6 +64,7 @@ impl MockPeer {
     }
 
     /// Verifies the socket gets strictly disconnected (dropped) by Bitcrab
+    #[allow(dead_code)]
     pub async fn assert_disconnected(&mut self, wait: Duration) -> bool {
         let mut buf = [0u8; 1];
         match timeout(wait, self.stream.read(&mut buf)).await {
