@@ -22,7 +22,7 @@ fn test_storage_survives_process_restart() {
     
     // Phase 1: Write data
     {
-        let mut mgr = BlockFileManager::new(&dir, Magic::REGTEST, 0).unwrap();
+        let mut mgr = BlockFileManager::new(&dir, Magic::Regtest, 0).unwrap();
         let block = b"test_block_data";
         let _pos = mgr.write_block(block).unwrap();
         mgr.flush().unwrap();
@@ -30,7 +30,7 @@ fn test_storage_survives_process_restart() {
     
     // Phase 2: Reopen and verify
     {
-        let _mgr = BlockFileManager::new(&dir, Magic::REGTEST, 0).unwrap();
+        let _mgr = BlockFileManager::new(&dir, Magic::Regtest, 0).unwrap();
         // Should successfully open existing files without error
         assert!(dir.join("blocks").exists());
     }
@@ -45,7 +45,7 @@ fn test_corrupted_file_detection() {
     
     // Create valid file first
     {
-        let mut mgr = BlockFileManager::new(&dir, Magic::REGTEST, 0).unwrap();
+        let mut mgr = BlockFileManager::new(&dir, Magic::Regtest, 0).unwrap();
         mgr.write_block(b"valid_block").unwrap();
         mgr.flush().unwrap();
     }
@@ -58,7 +58,7 @@ fn test_corrupted_file_detection() {
     }
     
     // Should handle corrupted file gracefully
-    let _result = BlockFileManager::new(&dir, Magic::REGTEST, 0);
+    let _result = BlockFileManager::new(&dir, Magic::Regtest, 0);
     // Might error or might rebuild - both acceptable for production
     
     fs::remove_dir_all(&dir).ok();
@@ -71,7 +71,7 @@ fn test_partial_write_recovery() {
     
     // Phase 1: Write multiple blocks
     {
-        let mut mgr = BlockFileManager::new(&dir, Magic::REGTEST, 0).unwrap();
+        let mut mgr = BlockFileManager::new(&dir, Magic::Regtest, 0).unwrap();
         for i in 0..5 {
             mgr.write_block(&[i as u8; 10]).unwrap();
         }
@@ -80,7 +80,7 @@ fn test_partial_write_recovery() {
     
     // Phase 2: Reopen - partially written data should be recoverable
     {
-        let _mgr = BlockFileManager::new(&dir, Magic::REGTEST, 0).unwrap();
+        let _mgr = BlockFileManager::new(&dir, Magic::Regtest, 0).unwrap();
         // Should not panic
         assert!(dir.join("blocks").exists());
     }
@@ -92,7 +92,7 @@ fn test_partial_write_recovery() {
 fn test_multiple_file_rotation() {
     // Test that storage correctly rotates between multiple block files
     let dir = test_dir();
-    let mut mgr = BlockFileManager::new(&dir, Magic::REGTEST, 0).unwrap();
+    let mut mgr = BlockFileManager::new(&dir, Magic::Regtest, 0).unwrap();
     
     // Each block file has limited size
     // Manager should rotate to next file when size limit reached
@@ -110,7 +110,7 @@ fn test_multiple_file_rotation() {
 fn test_undo_data_persistence() {
     // Undo records are separate from block data
     let dir = test_dir();
-    let mut mgr = BlockFileManager::new(&dir, Magic::REGTEST, 0).unwrap();
+    let mut mgr = BlockFileManager::new(&dir, Magic::Regtest, 0).unwrap();
     
     // Write block and undo data
     mgr.write_block(b"block").unwrap();
@@ -130,7 +130,7 @@ fn test_concurrent_read_write() {
     // Multiple readers accessing storage while writes happen
     let dir = test_dir();
     let mgr = Arc::new(std::sync::Mutex::new(
-        BlockFileManager::new(&dir, Magic::REGTEST, 0).unwrap()
+        BlockFileManager::new(&dir, Magic::Regtest, 0).unwrap()
     ));
     
     // Write block
@@ -162,12 +162,12 @@ fn test_magic_bytes_consistency() {
     // Magic bytes identify the network and should be verified
     let dir = test_dir();
     
-    let mut mgr = BlockFileManager::new(&dir, Magic::REGTEST, 0).unwrap();
+    let mut mgr = BlockFileManager::new(&dir, Magic::Regtest, 0).unwrap();
     mgr.write_block(b"testnet").unwrap();
     mgr.flush().unwrap();
     
     // Reopening with different magic should handle gracefully
-    let mgr2 = BlockFileManager::new(&dir, Magic::REGTEST, 0).unwrap();
+    let mgr2 = BlockFileManager::new(&dir, Magic::Regtest, 0).unwrap();
     // Same magic should work fine
     assert_eq!(mgr2.current_file(), 0);
     
@@ -190,7 +190,7 @@ fn test_disk_space_exhaustion_handling() {
 fn test_large_block_handling() {
     // Handle blocks near the maximum allowed size
     let dir = test_dir();
-    let mut mgr = BlockFileManager::new(&dir, Magic::REGTEST, 0).unwrap();
+    let mut mgr = BlockFileManager::new(&dir, Magic::Regtest, 0).unwrap();
     
     // Create 1 MB mock block
     let large_block: Vec<u8> = vec![0xAB; 1_000_000];

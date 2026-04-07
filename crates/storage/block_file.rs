@@ -44,82 +44,16 @@ use std::{
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-/// Maximum size of a single block file before rotating to the next.
-/// Matches Bitcoin Core's `MAX_BLOCKFILE_SIZE`.
-pub const MAX_BLOCK_FILE_SIZE: u64 = 128 * 1024 * 1024; // 128 MiB
-
-/// Pre-allocation chunk size for block files.
-/// Matches Bitcoin Core's `BLOCKFILE_CHUNK_SIZE`.
-pub const BLOCK_FILE_CHUNK: u64 = 16 * 1024 * 1024; // 16 MiB
-
-/// Pre-allocation chunk size for undo files.
-/// Matches Bitcoin Core's `UNDOFILE_CHUNK_SIZE`.
-pub const UNDO_FILE_CHUNK: u64 = 1024 * 1024; // 1 MiB
+use bitcrab_common::constants::{BLOCK_FILE_CHUNK, MAX_BLOCK_FILE_SIZE, UNDO_FILE_CHUNK};
 
 // ── Magic ─────────────────────────────────────────────────────────────────────
 
 /// Network-specific message start bytes prepended to every record.
 ///
 /// Bitcoin Core: `CChainParams::MessageStart()`
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Magic(pub [u8; 4]);
+pub use bitcrab_common::Magic;
 
-impl Magic {
-    pub const MAINNET:  Magic = Magic([0xF9, 0xBE, 0xB4, 0xD9]);
-    pub const TESTNET3: Magic = Magic([0x0B, 0x11, 0x09, 0x07]);
-    pub const SIGNET:   Magic = Magic([0x0A, 0x03, 0xCF, 0x40]);
-    pub const REGTEST:  Magic = Magic([0xFA, 0xBF, 0xB5, 0xDA]);
-}
-
-impl BitcoinEncode for Magic {
-    fn encode(&self, enc: Encoder) -> Encoder {
-        enc.encode_field(&self.0)
-    }
-}
-impl BitcoinDecode for Magic {
-    fn decode(dec: Decoder) -> Result<(Self, Decoder), DecodeError> {
-        let (bytes, dec) = dec.decode_field::<[u8; 4]>("magic")?;
-        Ok((Magic(bytes), dec))
-    }
-}
-// ── FlatFilePos ───────────────────────────────────────────────────────────────
-
-/// A pointer to a record's data within the flat file sequence.
-///
-/// The `offset` points to the first byte of the data payload — past the
-/// 8-byte `magic + size` header. This matches Bitcoin Core's convention
-/// where `CDiskBlockPos::nPos` points to the data, not the header.
-///
-/// Serialised as 8 bytes: `file (4 LE) + offset (4 LE)`.
-/// Stored in the block index under the `b` prefix key for every known block.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct FlatFilePos {
-    /// File number — e.g. `3` resolves to `blk00003.dat`.
-    pub file: u32,
-    /// Byte offset of the data payload within the file.
-    pub offset: u32,
-}
-
-impl FlatFilePos {
-    pub const fn new(file: u32, offset: u32) -> Self {
-        Self { file, offset }
-    }
-}
-
-impl BitcoinEncode for FlatFilePos {
-    /// Serialise: file (4 LE) + offset (4 LE) = 8 bytes.
-    fn encode(&self, enc: Encoder) -> Encoder {
-        enc.encode_field(&self.file)
-           .encode_field(&self.offset)
-    }
-}
-impl BitcoinDecode for FlatFilePos {
-    fn decode(dec: Decoder) -> Result<(Self, Decoder), DecodeError> {
-        let (file,   dec) = dec.decode_field::<u32>("FlatFilePos::file")?;
-        let (offset, dec) = dec.decode_field::<u32>("FlatFilePos::offset")?;
-        Ok((FlatFilePos { file, offset }, dec))
-    }
-}
+pub use bitcrab_common::FlatFilePos;
 
 // ── BlockFileInfo ─────────────────────────────────────────────────────────────
 
@@ -466,109 +400,4 @@ fn read_record(seq: &FlatFileSeq, pos: FlatFilePos) -> Result<Vec<u8>, StoreErro
     })?;
 
     Ok(data)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use bitcrab_common::wire::encode::Encoder;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    // Use atomic counter for unique test directories
-    static TEST_ID: AtomicUsize = AtomicUsize::new(0);
-
-    fn test_dir() -> PathBuf {
-        let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
-        let dir = PathBuf::from(format!("target/bitcrab_test_{}", id));
-        // Clean up first if it exists
-        let _ = std::fs::remove_dir_all(&dir);
-        dir
-    }
-
-    #[test]
-    fn flat_file_pos_encode_decode_roundtrip() {
-        let pos = FlatFilePos::new(42, 1337);
-        let bytes = Encoder::new().encode_field(&pos).finish();
-        let (decoded, dec) = FlatFilePos::decode(Decoder::new(&bytes)).unwrap();
-        dec.finish("FlatFilePos").unwrap();
-        assert_eq!(pos, decoded);
-    }
-
-    #[test]
-    fn block_file_info_encode_decode_roundtrip() {
-        let mut info = BlockFileInfo::default();
-        info.update_for_block(100, 1_700_000_000);
-        info.update_for_block(101, 1_700_000_010);
-        info.size      = 4096;
-        info.undo_size = 512;
-
-        let bytes = Encoder::new().encode_field(&info).finish();
-        assert_eq!(bytes.len(), 36);
-
-        let (decoded, dec) = BlockFileInfo::decode(Decoder::new(&bytes)).unwrap();
-        dec.finish("BlockFileInfo").unwrap();
-
-        assert_eq!(decoded.blocks,       2);
-        assert_eq!(decoded.height_first, 100);
-        assert_eq!(decoded.height_last,  101);
-        assert_eq!(decoded.size,         4096);
-        assert_eq!(decoded.undo_size,    512);
-    }
-
-    #[test]
-    fn write_and_read_block_roundtrip() {
-        let dir = test_dir();
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("Failed to create test dir");
-
-        let block = b"fake_block_payload";
-        let mut mgr = BlockFileManager::new(&dir, Magic::REGTEST, 0).expect("Failed to create BlockFileManager");
-        let pos = mgr.write_block(block).expect("Failed to write block");
-        let back = mgr.read_block(pos).expect("Failed to read block");
-
-        assert_eq!(back, block);
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn write_and_read_undo_roundtrip() {
-        let dir = test_dir();
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("Failed to create test dir");
-
-        let mut mgr = BlockFileManager::new(&dir, Magic::REGTEST, 0).expect("Failed to create BlockFileManager");
-        mgr.write_block(b"block").expect("Failed to write block");
-
-        let undo = b"undo_payload";
-        let (pos, _) = mgr.write_undo(0, undo, 0).expect("Failed to write undo");
-        let back = mgr.read_undo(pos).expect("Failed to read undo");
-
-        assert_eq!(back, undo);
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn file_rotates_at_max_size() {
-        let dir = test_dir();
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("Failed to create test dir");
-
-        let mut mgr = BlockFileManager::new(&dir, Magic::REGTEST, 0).expect("Failed to create BlockFileManager");
-        mgr.current_size = MAX_BLOCK_FILE_SIZE - 10;
-
-        let pos = mgr.write_block(&vec![0u8; 100]).expect("Failed to write block");
-        assert_eq!(pos.file, 1, "should have rotated to file 1");
-        assert_eq!(mgr.current_file, 1);
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn magic_encode_decode_roundtrip() {
-        let magic = Magic::MAINNET;
-        let bytes = Encoder::new().encode_field(&magic).finish();
-        let (decoded, dec) = Magic::decode(Decoder::new(&bytes)).unwrap();
-        dec.finish("Magic").unwrap();
-        assert_eq!(magic, decoded);
-    }
 }
