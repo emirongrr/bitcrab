@@ -9,6 +9,9 @@ bitcrab-net = { path = "../crates/net" }
 bitcrab-storage = { path = "../crates/storage" }
 tokio = { version = "1", features = ["full", "test-util"] }
 proptest = "1.4"
+rand = { version = "0.8", features = ["small_rng"] }
+bitcrab-node = { path = "../crates/node" }
+hex = "0.4"
 
 [[test]]
 name = "bitcrab_tests"
