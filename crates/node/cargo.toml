@@ -9,6 +9,9 @@ rust-version.workspace = true
 path = "lib.rs"
 
 [dependencies]
-bitcrab-common.workspace = true
-thiserror.workspace      = true
-tracing.workspace        = true
+bitcrab-common.workspace  = true
+bitcrab-net.workspace     = true
+bitcrab-storage.workspace = true
+thiserror.workspace       = true
+tracing.workspace         = true
+tokio.workspace           = true
