@@ -49,5 +49,5 @@ async fn test_handshake_flow_success() {
     let connect_res = peer_manager.connect_addr(local_addr).await;
     assert!(connect_res.is_ok(), "Handshake should succeed");
 
-    let _ = server_task.await;
+    server_task.await.expect("Background server task panicked or failed");
 }

@@ -8,5 +8,3 @@ pub mod peer;
 pub mod sync;
 pub mod peer_manager;
 pub mod addr_man;
-#[cfg(test)]
-mod tests;

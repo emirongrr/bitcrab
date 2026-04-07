@@ -17,6 +17,7 @@ use bitcrab_common::wire::{
 };
 use crate::p2p::message::Command;
 use super::BitcoinMessage;
+use bitcrab_common::constants::{PROTOCOL_VERSION, SERVICES, USER_AGENT};
 
 #[derive(Debug, Clone)]
 pub struct Version {
@@ -36,12 +37,6 @@ pub struct Version {
 }
 
 impl Version {
-    /// Bitcoin Core: PROTOCOL_VERSION = 70015 in src/version.h
-    pub const PROTOCOL_VERSION: i32 = 70015;
-    pub const USER_AGENT: &'static str = "/bitcrab:0.1.0/";
-    /// NODE_NETWORK(1) | NODE_WITNESS(8)
-    /// Bitcoin Core: src/net.h
-    pub const SERVICES: u64 = 0x09;
     
     pub fn our_version_with_nonce(nonce: u64) -> Self {
         let mut v = Self::our_version();
@@ -50,8 +45,8 @@ impl Version {
     }
     pub fn our_version() -> Self {
         Self {
-            version:       Self::PROTOCOL_VERSION,
-            services:      Self::SERVICES,
+            version:       PROTOCOL_VERSION,
+            services:      SERVICES,
             timestamp:     SystemTime::now()
                                .duration_since(UNIX_EPOCH)
                                .unwrap()
@@ -59,11 +54,11 @@ impl Version {
             recv_services: 0,
             recv_addr:     [0u8; 16],
             recv_port:     0,
-            from_services: Self::SERVICES,
+            from_services: SERVICES,
             from_addr:     [0u8; 16],
             from_port:     0,
             nonce:         make_nonce(),
-            user_agent:    Self::USER_AGENT.to_string(),
+            user_agent:    USER_AGENT.to_string(),
             start_height:  0,
             relay:         true,
         }

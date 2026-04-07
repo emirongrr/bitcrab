@@ -5,34 +5,7 @@
 /// Network magic bytes — identifies which Bitcoin network.
 ///
 /// Bitcoin Core: MessageStartChars in src/protocol.h
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Magic {
-    Mainnet,
-    Testnet3,
-    Signet,
-    Regtest,
-}
-
-impl Magic {
-    pub fn to_bytes(self) -> [u8; 4] {
-        match self {
-            Magic::Mainnet  => [0xF9, 0xBE, 0xB4, 0xD9],
-            Magic::Testnet3 => [0x0B, 0x11, 0x09, 0x07],
-            Magic::Signet   => [0x0A, 0x03, 0xCF, 0x40],
-            Magic::Regtest  => [0xFA, 0xBF, 0xB5, 0xDA],
-        }
-    }
-
-    pub fn from_bytes(b: [u8; 4]) -> Option<Self> {
-        match b {
-            [0xF9, 0xBE, 0xB4, 0xD9] => Some(Magic::Mainnet),
-            [0x0B, 0x11, 0x09, 0x07] => Some(Magic::Testnet3),
-            [0x0A, 0x03, 0xCF, 0x40] => Some(Magic::Signet),
-            [0xFA, 0xBF, 0xB5, 0xDA] => Some(Magic::Regtest),
-            _ => None,
-        }
-    }
-}
+pub use bitcrab_common::Magic;
 
 /// P2P message command names.
 ///

@@ -22,7 +22,7 @@ pub enum P2pError {
     ///
     /// Bitcoin Core: `MAX_PROTOCOL_MESSAGE_LENGTH` check
     #[error("message too large: {size} bytes exceeds limit {limit}")]
-    MessageTooLarge { size: u32, limit: u32 },
+    MessageTooLarge { size: u32, limit: usize },
 
     /// Payload checksum did not match header checksum.
     ///
@@ -42,7 +42,7 @@ pub enum P2pError {
     ///
     /// Bitcoin Core: `MIN_PEER_PROTO_VERSION` check in `net_processing.cpp`
     #[error("peer version {version} is below minimum {minimum}")]
-    PeerVersionTooOld { version: u32, minimum: u32 },
+    PeerVersionTooOld { version: i32, minimum: i32 },
 
     /// IO error from the underlying TCP stream.
     #[error("io error: {0}")]

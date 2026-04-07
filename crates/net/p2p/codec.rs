@@ -8,7 +8,7 @@ use super::{
     message::{Command, Magic, MessageHeader},
 };
 
-pub const MAX_MESSAGE_SIZE: u32 = 32 * 1024 * 1024;
+use bitcrab_common::constants::MAX_MESSAGE_SIZE;
 
 /// Compute 4-byte checksum = hash256(payload)[0..4]
 ///
@@ -50,7 +50,7 @@ pub fn decode_header(buf: &[u8; 24], expected_magic: Magic) -> Result<MessageHea
     let command = Command::from_wire(&buf[4..16].try_into().unwrap());
     let length  = u32::from_le_bytes(buf[16..20].try_into().unwrap());
 
-    if length > MAX_MESSAGE_SIZE {
+    if (length as usize) > MAX_MESSAGE_SIZE {
         return Err(P2pError::MessageTooLarge { size: length, limit: MAX_MESSAGE_SIZE });
     }
 

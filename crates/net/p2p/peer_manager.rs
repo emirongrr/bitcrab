@@ -28,11 +28,9 @@ use crate::p2p::{
     messages::{BitcoinMessage, version::Version, verack::Verack},
     peer::Peer,
 };
+use bitcrab_common::constants::MIN_PEER_PROTO_VERSION;
 
-/// Minimum protocol version we accept from peers.
-///
-/// Bitcoin Core: MIN_PEER_PROTO_VERSION = 31800 in src/net_processing.cpp
-const MIN_PEER_VERSION: i32 = 31_800;
+
 
 /// Connection timeout in seconds.
 const CONNECT_TIMEOUT_SECS: u64 = 10;
@@ -251,10 +249,10 @@ impl PeerManager {
                         return Err(P2pError::SelfConnection);
                     }
 
-                    if v.version < MIN_PEER_VERSION {
+                    if v.version < MIN_PEER_PROTO_VERSION as i32 {
                         return Err(P2pError::PeerVersionTooOld {
-                            version: v.version as u32,
-                            minimum: MIN_PEER_VERSION as u32,
+                            version: v.version,
+                            minimum: MIN_PEER_PROTO_VERSION as i32,
                         });
                     }
 
