@@ -9,65 +9,263 @@ use std::net::SocketAddr;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc::{channel, Sender, Receiver};
-use tokio::time::{Instant, Duration};
-use tracing::{debug, warn};
+use tokio::sync::oneshot;
+use tokio::time::{Instant, Duration, interval};
+use tracing::{debug, info, warn};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use bytes::{BytesMut, Buf};
 
-use crate::p2p::{
+use super::{
     codec::{decode_header, encode_header, verify_checksum},
     errors::P2pError,
     message::Magic,
-    messages::{BitcoinMessage, Message, ping::{Ping, Pong}},
+    messages::{Message, ping::{Ping, Pong}},
+
+    actor::{ActorRef, ActorError},
+    peer_table::PeerTable,
 };
 
-/// State of a peer connection.
-///
-/// Bitcoin Core: CNode::fSuccessfullyConnected in src/net.h
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PeerState {
-    /// TCP connected, handshake not yet complete.
-    Connecting,
-    /// Handshake complete, ready for protocol messages.
-    Ready,
-    /// Disconnected — connection closed or timed out.
-    Disconnected,
+
+/// Messages sent to the PeerActor via PeerHandle.
+pub enum PeerMessage {
+    /// Send a protocol message to the remote peer.
+    Send(Message),
+    /// Request peer information (version, services, etc).
+    GetInfo(oneshot::Sender<PeerInfo>),
+    /// Disconnect this peer.
+    Disconnect,
 }
 
-/// A connected Bitcoin P2P peer.
-///
-/// Bitcoin Core: CNode in src/net.h
-/// One Peer per TCP connection. PeerManager holds a collection of these.
-pub struct Peer {
-    /// Remote address.
-    pub addr:         SocketAddr,
-    /// Network magic for this connection.
-    pub magic:        Magic,
-    /// Current connection state.
-    pub state:        PeerState,
-
-    // Fields populated after handshake
-    /// Peer's protocol version.
-    /// Bitcoin Core: CNode::nVersion
-    pub version:      i32,
-    /// Peer's user agent string.
-    /// Bitcoin Core: CNode::cleanSubVer
-    pub user_agent:   String,
-    /// Peer's reported chain height at connection time.
-    /// Bitcoin Core: CNode::nStartingHeight
+#[derive(Debug, Clone)]
+pub struct PeerInfo {
+    pub addr: SocketAddr,
+    pub version: i32,
+    pub user_agent: String,
+    pub services: u64,
     pub start_height: i32,
-    /// Peer's reported services bitmask.
-    /// Bitcoin Core: CNode::nServices
-    pub services:     u64,
-
-    /// Handshake-calculated latency from Ping messages
-    pub latency:      Arc<Mutex<Option<Duration>>>,
-
-    /// Channel to send raw bytes to the writer task.
-    outbound_tx: Sender<Vec<u8>>,
+    pub latency: Option<Duration>,
+    pub conntime: u64,
 }
 
-impl Peer {
+/// Handle to a PeerActor.
+#[derive(Clone)]
+pub struct PeerHandle {
+    pub addr: SocketAddr,
+    pub actor: ActorRef<PeerMessage>,
+}
+
+impl PeerHandle {
+    pub async fn send(&self, msg: Message) -> Result<(), ActorError> {
+        self.actor.cast(PeerMessage::Send(msg)).await
+    }
+
+    pub async fn get_info(&self) -> Result<PeerInfo, ActorError> {
+        self.actor.call(|tx| PeerMessage::GetInfo(tx)).await
+    }
+
+    pub async fn disconnect(&self) -> Result<(), ActorError> {
+        self.actor.cast(PeerMessage::Disconnect).await
+    }
+}
+
+
+
+
+/// The internal actor that manages a single peer connection.
+struct PeerActor {
+    addr: SocketAddr,
+    magic: Magic,
+    stream: TcpStream,
+    receiver: Option<Receiver<PeerMessage>>,
+
+    inbound_tx: Sender<Message>,
+    table: PeerTable,
+
+    // Metadata
+    version: i32,
+    user_agent: String,
+    start_height: i32,
+    services: u64,
+
+    conntime: Instant,
+    read_buf: BytesMut,
+}
+
+
+impl PeerActor {
+    async fn run(mut self) {
+        let mut ping_interval = interval(Duration::from_secs(120));
+        let mut receiver = self.receiver.take().expect("receiver already taken");
+
+        loop {
+
+            tokio::select! {
+                // 1. Handle messages from the PeerHandle
+                Some(msg) = receiver.recv() => {
+
+                    match msg {
+                        PeerMessage::Send(p2p_msg) => {
+                            if let Err(e) = self.send_to_stream(&p2p_msg).await {
+                                warn!("[{}] failed to send message {}: {}", self.addr, p2p_msg, e);
+                                break;
+                            }
+                        }
+
+                        PeerMessage::GetInfo(tx) => {
+                            let info = PeerInfo {
+                                addr: self.addr,
+                                version: self.version,
+                                user_agent: self.user_agent.clone(),
+                                services: self.services,
+                                start_height: self.start_height,
+                                latency: self.latency,
+                                conntime: self.conntime.elapsed().as_secs(), 
+                            };
+                            let _ = tx.send(info);
+                        }
+                        PeerMessage::Disconnect => {
+                            info!("[{}] disconnect requested", self.addr);
+                            break;
+                        }
+                    }
+                }
+
+                // 2. Handle periodic Pings
+                _ = ping_interval.tick() => {
+                    if let Err(e) = self.send_ping().await {
+                        warn!("[{}] failed to send keepalive ping: {}", self.addr, e);
+                        break;
+                    }
+                }
+
+                // 3. Handle incoming data from the socket
+                res = self.read_message() => {
+                    match res {
+                        Ok(Some(msg)) => {
+                            if let Err(e) = self.handle_incoming(msg).await {
+                                debug!("[{}] error handling incoming message: {}", self.addr, e);
+                                // Depending on error, we might want to continue or break.
+                                // For protocol errors, we often break/disconnect.
+                            }
+                        }
+                        Ok(None) => {
+                            info!("[{}] connection closed by remote", self.addr);
+                            break;
+                        }
+                        Err(e) => {
+                            warn!("[{}] read error: {}", self.addr, e);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        info!("[{}] PeerActor terminated", self.addr);
+        // Explicitly notify the PeerTable that we are gone.
+        let _ = self.table.actor().cast(crate::p2p::peer_table::PeerTableMessage::RemovePeer(self.addr)).await;
+    }
+
+    async fn send_to_stream(&mut self, msg: &Message) -> Result<(), P2pError> {
+        let payload = msg.encode();
+        let header = encode_header(self.magic, &msg.command(), &payload);
+        self.stream.write_all(&header).await?;
+        self.stream.write_all(&payload).await?;
+        Ok(())
+    }
+
+
+    async fn send_ping(&mut self) -> Result<(), P2pError> {
+        // Check timeout for existing pings (>20m)
+        if self.pending_pings.values().any(|v| v.elapsed().as_secs() > 1200) {
+            return Err(P2pError::ConnectionFailed { 
+                addr: self.addr.to_string(), 
+                reason: "ping timeout".into() 
+            });
+        }
+
+        let nonce = rand::random::<u64>();
+        self.pending_pings.insert(nonce, Instant::now());
+        self.send_to_stream(&Message::Ping(Ping { nonce })).await
+    }
+
+
+    async fn read_message(&mut self) -> Result<Option<Message>, P2pError> {
+        loop {
+            // 1. Try to parse from the existing buffer
+            if self.read_buf.len() >= 24 {
+                let hdr_buf: &[u8; 24] = &self.read_buf[..24].try_into().unwrap();
+                let msg_hdr = match decode_header(hdr_buf, self.magic) {
+
+                    Ok(hdr) => hdr,
+                    Err(e) => {
+                        self.read_buf.advance(1); // corrupted? skip 1 byte and retry (Bitcoin Core behavior)
+                        return Err(e.into());
+                    }
+                };
+
+                let total_len = 24 + msg_hdr.length as usize;
+                if self.read_buf.len() >= total_len {
+                    // We have the full message!
+                    let payload = &self.read_buf[24..total_len];
+                    verify_checksum(&msg_hdr, payload)?;
+                    let msg = Message::decode(&msg_hdr.command, payload)
+                        .map_err(|e| P2pError::DecodeError(e.to_string()))?;
+                    
+                    self.read_buf.advance(total_len);
+                    return Ok(Some(msg));
+                }
+            }
+
+            // 2. Not enough data, read more from the stream
+            let mut temp_buf = [0u8; 4096];
+            match self.stream.read(&mut temp_buf).await {
+                Ok(0) => return Ok(None),
+                Ok(n) => self.read_buf.extend_from_slice(&temp_buf[..n]),
+                Err(e) => return Err(e.into()),
+            }
+        }
+    }
+
+
+    async fn handle_incoming(&mut self, msg: Message) -> Result<(), P2pError> {
+        match msg {
+            Message::Ping(ping) => {
+                self.send_to_stream(&Message::Pong(Pong { nonce: ping.nonce })).await?;
+            }
+
+            Message::Pong(pong) => {
+                if let Some(sent_at) = self.pending_pings.remove(&pong.nonce) {
+                    self.latency = Some(sent_at.elapsed());
+                }
+            }
+            Message::GetAddr(_) => {
+                debug!("[{}] received getaddr, responding with known peers", self.addr);
+                match self.table.get_addresses().await {
+                    Ok(addresses) => {
+                        let _ = self.send_to_stream(&Message::Addr(crate::p2p::messages::addr::Addr { addresses })).await;
+                    }
+                    Err(e) => {
+                        warn!("[{}] failed to fetch addresses from table: {}", self.addr, e);
+                    }
+                }
+            }
+            Message::Addr(addr) => {
+                debug!("[{}] received addr with {} peers", self.addr, addr.addresses.len());
+                let _ = self.table.add_addresses(addr.addresses, self.addr).await;
+            }
+            other => {
+                if self.inbound_tx.send(other).await.is_err() {
+                    return Err(P2pError::ConnectionClosed);
+                }
+            }
+        }
+        Ok(())
+
+    }
+}
+
+impl PeerHandle {
     /// Construct from an established, handshaked connection.
     pub(crate) fn start(
         addr: SocketAddr,
@@ -77,203 +275,45 @@ impl Peer {
         user_agent: String,
         start_height: i32,
         services: u64,
-        ban_list: Arc<Mutex<HashMap<std::net::IpAddr, Instant>>>
+        ban_list: Arc<Mutex<HashMap<std::net::IpAddr, Instant>>>,
+        table: PeerTable,
     ) -> (Self, Receiver<Message>) {
-        let (outbound_tx, mut outbound_rx) = channel::<Vec<u8>>(1024);
-        let (inbound_tx, inbound_rx) = channel::<Message>(1024);
-        
-        let pending_pings = Arc::new(Mutex::new(HashMap::<u64, Instant>::new()));
-        let latency = Arc::new(Mutex::new(None));
+        let (actor_tx, actor_rx) = channel(1024);
+        let (inbound_tx, inbound_rx) = channel(1024);
 
-        let peer = Self {
+        let actor = PeerActor {
             addr,
             magic,
-            state: PeerState::Ready,
+            stream,
+            receiver: Some(actor_rx),
+
+            inbound_tx,
+            table,
             version,
             user_agent,
             start_height,
             services,
-            latency: Arc::clone(&latency),
-            outbound_tx: outbound_tx.clone(),
+            pending_pings: HashMap::new(),
+            latency: None,
+            conntime: Instant::now(),
+            ban_list,
+            read_buf: BytesMut::with_capacity(1024 * 64),
         };
 
-        // Split the TCP stream into read and write halves.
-        let (mut read_half, mut write_half) = stream.into_split();
 
-        // WRITER TASK
+        let addr_clone = addr;
         tokio::spawn(async move {
-            while let Some(msg_bytes) = outbound_rx.recv().await {
-                if write_half.write_all(&msg_bytes).await.is_err() {
-                    break;
-                }
-            }
+            actor.run().await;
         });
 
-        let reader_ping_tracker = Arc::clone(&pending_pings);
-        let reader_outbound_tx = outbound_tx.clone(); // for auto-Pong replies
-        let p_addr = addr.clone();
-        
-        // READER TASK
-        tokio::spawn(async move {
-            let mut misbehavior_score = 0;
-
-            loop {
-                let mut hdr_buf = [0u8; 24];
-                if read_half.read_exact(&mut hdr_buf).await.is_err() {
-                    break;
-                }
-
-                let msg_hdr = match decode_header(&hdr_buf, magic) {
-                    Ok(hdr) => hdr,
-                    Err(_) => {
-                        // Misbehavior: wrong magic / garbled header
-                        misbehavior_score += 20;
-                        if misbehavior_score > 100 {
-                            ban_list.lock().unwrap().insert(p_addr.ip(), Instant::now() + Duration::from_secs(86400));
-                            warn!("[{}] Banned! (Decode Header Error)", p_addr);
-                        }
-                        warn!("[{}] Stream corrupted at header decode. Strict dropping connection.", p_addr);
-                        break; // Strict drop ensures no stream desync reading
-                    }
-                };
-
-                let mut payload = vec![0u8; msg_hdr.length as usize];
-                if msg_hdr.length > 0 {
-                    if read_half.read_exact(&mut payload).await.is_err() {
-                        break;
-                    }
-                }
-
-                if verify_checksum(&msg_hdr, &payload).is_err() {
-                    misbehavior_score += 50;
-                    if misbehavior_score > 100 {
-                        ban_list.lock().unwrap().insert(p_addr.ip(), Instant::now() + Duration::from_secs(86400));
-                        warn!("[{}] Banned! (Checksum Mismatch)", p_addr);
-                    }
-                    warn!("[{}] Stream corrupted due to checksum mismatch. Strict dropping connection.", p_addr);
-                    break; // Strict drop
-                }
-
-                let msg = match Message::decode(&msg_hdr.command, &payload) {
-                    Ok(msg) => msg,
-                    Err(_) => {
-                        misbehavior_score += 20;
-                        if misbehavior_score > 100 {
-                            ban_list.lock().unwrap().insert(p_addr.ip(), Instant::now() + Duration::from_secs(86400));
-                            warn!("[{}] Banned! (Invalid Payload)", p_addr);
-                        }
-                        warn!("[{}] Stream corrupted due to invalid parsing. Strict dropping connection.", p_addr);
-                        break; // Strict drop
-                    }
-                };
-
-                // Auto-reply to Ping with Pong — never surface Ping to the app layer.
-                // Bitcoin Core: net_processing.cpp ProcessMessage ("ping" → send pong)
-                if let Message::Ping(ping) = &msg {
-                    let pong = Pong { nonce: ping.nonce };
-                    let pong_payload = pong.encode();
-                    let header = encode_header(magic, &Pong::COMMAND, &pong_payload);
-                    let mut full_msg = header.to_vec();
-                    full_msg.extend(pong_payload);
-                    let _ = reader_outbound_tx.try_send(full_msg);
-                    continue; // Don't surface Ping to the app
-                }
-
-                // Calculate Latency RTT on Pong
-                if let Message::Pong(pong) = &msg {
-                    let mut pmap = reader_ping_tracker.lock().unwrap();
-                    if let Some(sent_time) = pmap.remove(&pong.nonce) {
-                        let rtt = sent_time.elapsed();
-                        debug!("[{}] RTT latency: {:?}", p_addr, rtt);
-                        *latency.lock().unwrap() = Some(rtt);
-                    }
-                    continue;
-                }
-
-                if inbound_tx.send(msg).await.is_err() {
-                    break; // Channel closed, app dropped peer handle
-                }
-            }
-        });
-
-        // KEEPALIVE PINGER TASK
-        let pinger_tx = outbound_tx.clone();
-        let ping_tracker = Arc::clone(&pending_pings);
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(120));
-            loop {
-                interval.tick().await;
-
-                // Check timeouts for older pings (20 minutes).
-                {
-                    let map = ping_tracker.lock().unwrap();
-                    if map.values().any(|v| v.elapsed().as_secs() > 1200) {
-                        warn!("[{}] ping timeout! Dropping connection.", addr);
-                        // In a real actor, we'd signal to close the connection/drop.
-                        // For now we break, which stops sending pings. Let's break the writer by dropping tx.
-                        break;
-                    }
-                }
-
-                let nonce = rand::random::<u64>();
-                ping_tracker.lock().unwrap().insert(nonce, Instant::now());
-
-                let ping = Ping { nonce };
-                let ping_payload = ping.encode();
-                let header = encode_header(magic, &Ping::COMMAND, &ping_payload);
-                let mut full_msg = header.to_vec();
-                full_msg.extend(ping_payload);
-
-                if pinger_tx.send(full_msg).await.is_err() {
-                    break;
-                }
-            }
-        });
-
-        (peer, inbound_rx)
-    }
-
-    /// Send a message to this peer.
-    /// Non-blocking: queues the message on the `mpsc::channel`.
-    pub fn send<M: BitcoinMessage>(&self, msg: &M) -> Result<(), P2pError> {
-        let payload = msg.encode();
-        let header  = encode_header(self.magic, &M::COMMAND, &payload);
-        let mut full_msg = header.to_vec();
-        full_msg.extend(payload);
-        
-        self.outbound_tx.try_send(full_msg).map_err(|_| P2pError::ConnectionClosed)?;
-        debug!("[{}] queued {}", self.addr, M::COMMAND.name());
-        Ok(())
-    }
-
-    /// Mark this peer as disconnected.
-    pub fn disconnect(&mut self) {
-        self.state = PeerState::Disconnected;
-    }
-
-    /// True if this peer supports NODE_NETWORK.
-    ///
-    /// Bitcoin Core: NODE_NETWORK = 1 in src/protocol.h
-    pub fn has_network(&self) -> bool {
-        self.services & 0x01 != 0
-    }
-
-    /// True if this peer supports NODE_WITNESS (SegWit).
-    ///
-    /// Bitcoin Core: NODE_WITNESS = 8 in src/protocol.h
-    pub fn has_witness(&self) -> bool {
-        self.services & 0x08 != 0
+        (
+            Self { 
+                addr: addr_clone, 
+                actor: ActorRef::new(actor_tx) 
+            }, 
+            inbound_rx
+        )
     }
 }
 
-impl std::fmt::Debug for Peer {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Peer")
-            .field("addr",         &self.addr)
-            .field("state",        &self.state)
-            .field("version",      &self.version)
-            .field("user_agent",   &self.user_agent)
-            .field("start_height", &self.start_height)
-            .finish()
-    }
-}
+
