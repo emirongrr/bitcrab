@@ -61,6 +61,7 @@ impl Hash256 {
     }
 
     pub const ZERO: Self = Self([0u8; 32]);
+    pub const fn zero() -> Self { Self::ZERO }
 }
 
 impl fmt::Debug for Hash256 {
@@ -106,6 +107,7 @@ impl BlockHash {
     }
 
     pub const ZERO: Self = Self([0u8; 32]);
+    pub const fn zero() -> Self { Self::ZERO }
 }
 
 impl fmt::Debug for BlockHash {
@@ -151,6 +153,7 @@ impl Txid {
     }
 
     pub const ZERO: Self = Self([0u8; 32]);
+    pub const fn zero() -> Self { Self::ZERO }
 }
 
 impl fmt::Debug for Txid {
@@ -191,6 +194,7 @@ impl Hash160 {
     }
 
     pub const ZERO: Self = Self([0u8; 20]);
+    pub const fn zero() -> Self { Self::ZERO }
 }
 
 impl fmt::Debug for Hash160 {
@@ -228,4 +232,3 @@ pub enum HashError {
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
-

@@ -157,13 +157,36 @@ pub const DIFFICULTY_ADJUSTMENT_INTERVAL: u32 = 2_016;
 pub const TARGET_TIMESPAN: u32 = DIFFICULTY_ADJUSTMENT_INTERVAL * TARGET_BLOCK_TIME;
 
 // ---------------------------------------------------------------------------
+// Storage
+// ---------------------------------------------------------------------------
+
+/// Maximum size of a single block file before rotating to the next.
+/// Matches Bitcoin Core's `MAX_BLOCKFILE_SIZE` = 128 MiB.
+pub const MAX_BLOCK_FILE_SIZE: u64 = 128 * 1024 * 1024;
+
+/// Pre-allocation chunk size for block files.
+/// Matches Bitcoin Core's `BLOCKFILE_CHUNK_SIZE` = 16 MiB.
+pub const BLOCK_FILE_CHUNK: u64 = 16 * 1024 * 1024;
+
+/// Pre-allocation chunk size for undo files.
+/// Matches Bitcoin Core's `UNDOFILE_CHUNK_SIZE` = 1 MiB.
+pub const UNDO_FILE_CHUNK: u64 = 1024 * 1024;
+
+// ---------------------------------------------------------------------------
 // P2P network
 // ---------------------------------------------------------------------------
 
 /// Current P2P protocol version.
 ///
 /// Bitcoin Core: `PROTOCOL_VERSION = 70015` in `src/version.h`
-pub const PROTOCOL_VERSION: u32 = 70_015;
+pub const PROTOCOL_VERSION: i32 = 70_015;
+
+/// node_network(1) | node_witness(8)
+/// Bitcoin Core: src/protocol.h
+pub const SERVICES: u64 = 0x09;
+
+/// Default user agent string for Bitcrab.
+pub const USER_AGENT: &'static str = "/bitcrab:0.1.0/";
 
 /// Minimum P2P protocol version we will connect to.
 ///
@@ -179,7 +202,7 @@ pub const MAX_HEADERS_PER_MSG: usize = 2_000;
 ///
 /// Bitcoin Core: `MAX_PROTOCOL_MESSAGE_LENGTH = 4 * 1024 * 1024`
 /// Note: Bitcoin Core uses 4 MB; we use 32 MB to match current practice.
-pub const MAX_MESSAGE_SIZE: u32 = 32 * 1024 * 1024;
+pub const MAX_MESSAGE_SIZE: usize = 32 * 1024 * 1024;
 
 // ---------------------------------------------------------------------------
 // Tests — constants must be self-consistent

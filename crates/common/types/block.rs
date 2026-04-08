@@ -9,6 +9,12 @@
 
 use super::{
     hash::{hash256, BlockHash, Hash256},
+    flat_file_pos::FlatFilePos,
+};
+use crate::wire::{
+    decode::{BitcoinDecode, Decoder},
+    encode::{BitcoinEncode, Encoder},
+    error::DecodeError,
 };
 
 /// Block height from genesis. Genesis = height 0.
@@ -36,6 +42,18 @@ impl BlockHeight {
 impl std::fmt::Display for BlockHeight {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
+    }
+}
+
+impl BitcoinEncode for BlockHeight {
+    fn encode(&self, enc: Encoder) -> Encoder {
+        enc.encode_field(&self.0)
+    }
+}
+impl BitcoinDecode for BlockHeight {
+    fn decode(dec: Decoder) -> Result<(Self, Decoder), DecodeError> {
+        let (val, dec) = dec.decode_field::<u32>("BlockHeight")?;
+        Ok((Self(val), dec))
     }
 }
 
@@ -147,6 +165,18 @@ impl BlockHeader {
     }
 }
 
+impl BitcoinEncode for BlockHeader {
+    fn encode(&self, enc: Encoder) -> Encoder {
+        enc.push_bytes(&self.serialize())
+    }
+}
+impl BitcoinDecode for BlockHeader {
+    fn decode(dec: Decoder) -> Result<(Self, Decoder), DecodeError> {
+        let (bytes, dec) = dec.decode_field::<[u8; 80]>("BlockHeader")?;
+        Ok((Self::deserialize(&bytes), dec))
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Block errors
 // ---------------------------------------------------------------------------
@@ -197,4 +227,47 @@ pub enum BlockError {
         "wrong difficulty at height {height}: got {actual:#010x}, expected {expected:#010x}"
     )]
     WrongDifficulty { height: u32, actual: u32, expected: u32 },
+}
+
+// ---------------------------------------------------------------------------
+// Block index
+// ---------------------------------------------------------------------------
+
+/// Metadata about a block in the chain.
+///
+/// Bitcoin Core: `CBlockIndex` in `src/chain.h`
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlockIndex {
+    pub header:   BlockHeader,
+    pub height:   BlockHeight,
+    pub file_pos: Option<FlatFilePos>,
+    pub undo_pos: Option<FlatFilePos>,
+}
+
+impl BitcoinEncode for BlockIndex {
+    fn encode(&self, enc: Encoder) -> Encoder {
+        enc.encode_field(&self.header)
+           .encode_field(&self.height)
+           .encode_field(&self.file_pos.is_some())
+           .encode_field(&self.file_pos.unwrap_or(FlatFilePos::new(0, 0)))
+           .encode_field(&self.undo_pos.is_some())
+           .encode_field(&self.undo_pos.unwrap_or(FlatFilePos::new(0, 0)))
+    }
+}
+
+impl BitcoinDecode for BlockIndex {
+    fn decode(dec: Decoder) -> Result<(Self, Decoder), DecodeError> {
+        let (header, dec) = dec.decode_field::<BlockHeader>("BlockIndex::header")?;
+        let (height, dec) = dec.decode_field::<BlockHeight>("BlockIndex::height")?;
+        
+        let (has_pos, dec) = dec.decode_field::<bool>("BlockIndex::has_pos")?;
+        let (pos,     dec) = dec.decode_field::<FlatFilePos>("BlockIndex::pos")?;
+        let file_pos = if has_pos { Some(pos) } else { None };
+
+        let (has_undo, dec) = dec.decode_field::<bool>("BlockIndex::has_undo")?;
+        let (undo,     dec) = dec.decode_field::<FlatFilePos>("BlockIndex::undo")?;
+        let undo_pos = if has_undo { Some(undo) } else { None };
+
+        Ok((BlockIndex { header, height, file_pos, undo_pos }, dec))
+    }
 }
