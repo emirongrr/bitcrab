@@ -1,0 +1,20 @@
+[package]
+name = "bitcrab-monitor"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "bitcrab-monitor"
+path = "main.rs"
+
+[dependencies]
+
+ratatui = "0.26"
+crossterm = { version = "0.27", features = ["event-stream"] }
+reqwest = { version = "0.11", features = ["json"] }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+futures = "0.3"
+chrono = "0.4"
+eyre = "0.6"
