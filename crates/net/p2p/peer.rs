@@ -89,6 +89,7 @@ struct PeerActor {
     // Internal State
     pending_pings: HashMap<u64, Instant>,
     latency: Option<Duration>,
+    #[allow(dead_code)]
     ban_list: Arc<Mutex<HashMap<std::net::IpAddr, Instant>>>,
     conntime: Instant,
     read_buf: BytesMut,
