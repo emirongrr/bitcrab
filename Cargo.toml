@@ -8,6 +8,7 @@ members = [
     "crates/net/rpc",
     "cmd/bitcrab",
     "cmd/monitor",
+    "crates/script",
     "test"
 ]
 
@@ -28,6 +29,7 @@ bitcrab-common = { path = "crates/common" }
 bitcrab-net    = { path = "crates/net" }
 bitcrab-node   = { path = "crates/node" }
 bitcrab-storage= { path = "crates/storage", features = ["rocksdb"] }
+bitcrab-script = { path = "crates/script" }
 bitcrab-rpc    = { path = "crates/net/rpc" }
 
 
@@ -38,6 +40,7 @@ hex                = "0.4.3"
 thiserror          = "1.0.61"
 tracing            = "0.1.40"
 tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
+secp256k1          = { version = "0.29.0", features = ["recovery", "global-context"] }
 tokio              = { version = "1.37.0", features = ["rt-multi-thread", "net", "io-util", "sync", "time", "macros", "signal"] }
 tokio-util         = { version = "0.7.11", features = ["rt"] }
 

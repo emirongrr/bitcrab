@@ -1,0 +1,15 @@
+[package]
+name           = "bitcrab-script"
+description    = "Bitcoin Script Interpreter"
+version.workspace      = true
+edition.workspace = true
+rust-version.workspace = true
+
+[lib]
+path = "lib.rs"
+
+[dependencies]
+bitcrab-common.workspace = true
+secp256k1.workspace      = true
+thiserror.workspace      = true
+tracing.workspace        = true
