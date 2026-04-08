@@ -24,8 +24,8 @@ pub use ping::{Ping, Pong};
 pub use verack::Verack;
 pub use version::Version;
 
-use bitcrab_common::wire::DecodeError;
 use crate::p2p::message::Command;
+use bitcrab_common::wire::DecodeError;
 
 /// A Bitcoin P2P message.
 pub trait BitcoinMessage: Sized {

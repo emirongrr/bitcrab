@@ -135,10 +135,7 @@ impl PeerManager {
         self.connect_addr(socket_addr).await
     }
 
-    pub async fn connect_a(
-        &self,
-        addr: SocketAddr,
-    ) -> Result<PeerHandle, P2pError> {
+    pub async fn connect_a(&self, addr: SocketAddr) -> Result<PeerHandle, P2pError> {
         self.connect_addr(addr).await
     }
 
@@ -155,10 +152,7 @@ impl PeerManager {
         self.connect_addr(addr).await
     }
 
-    pub async fn connect_addr(
-        &self,
-        socket_addr: SocketAddr,
-    ) -> Result<PeerHandle, P2pError> {
+    pub async fn connect_addr(&self, socket_addr: SocketAddr) -> Result<PeerHandle, P2pError> {
         if self.is_banned(&socket_addr.ip()) {
             return Err(P2pError::Banned);
         }

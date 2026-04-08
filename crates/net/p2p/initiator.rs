@@ -2,12 +2,12 @@
 
 use std::time::Duration;
 use tokio::time::interval;
-use tracing::{info, debug};
+use tracing::{debug, info};
 
 use super::{
     actor::{Actor, ActorError, Context},
-    peer_table::PeerTable,
     peer_manager::PeerManager,
+    peer_table::PeerTable,
 };
 
 /// Messages handled by the ConnectionInitiator actor.
@@ -23,7 +23,11 @@ pub struct ConnectionInitiator {
 }
 
 impl ConnectionInitiator {
-    pub fn new(peer_table: PeerTable, manager: std::sync::Arc<PeerManager>, target_outbound: usize) -> Self {
+    pub fn new(
+        peer_table: PeerTable,
+        manager: std::sync::Arc<PeerManager>,
+        target_outbound: usize,
+    ) -> Self {
         Self {
             peer_table,
             manager,
@@ -38,7 +42,10 @@ impl ConnectionInitiator {
         }
 
         let needed = self.target_outbound - current_count;
-        debug!("[initiator] current peers: {}, needed: {}", current_count, needed);
+        debug!(
+            "[initiator] current peers: {}, needed: {}",
+            current_count, needed
+        );
 
         for _ in 0..needed {
             if let Ok(Some(addr)) = self.peer_table.get_best_address().await {
@@ -58,7 +65,10 @@ impl ConnectionInitiator {
 impl Actor for ConnectionInitiator {
     type Message = InitiatorMessage;
 
-    fn on_start(&mut self, ctx: &mut Context<Self>) -> impl std::future::Future<Output = Result<(), ActorError>> + Send {
+    fn on_start(
+        &mut self,
+        ctx: &mut Context<Self>,
+    ) -> impl std::future::Future<Output = Result<(), ActorError>> + Send {
         let handle = ctx.handle();
         async move {
             info!("[initiator] starting connection initiator");

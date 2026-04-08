@@ -142,9 +142,12 @@ impl Store {
     }
 
     /// Fetch a coin from the UTXO set by its outpoint.
-    pub fn get_coin(&self, outpoint: &bitcrab_common::types::transaction::OutPoint) -> Result<Option<bitcrab_common::types::coin::Coin>, StoreError> {
+    pub fn get_coin(
+        &self,
+        outpoint: &bitcrab_common::types::transaction::OutPoint,
+    ) -> Result<Option<bitcrab_common::types::coin::Coin>, StoreError> {
         let read = self.backend.begin_read()?;
-        
+
         // Key: PREFIX_COIN (C) + txid + vout
         let mut key = Vec::with_capacity(37);
         key.push(tables::PREFIX_COIN);
@@ -155,8 +158,10 @@ impl Store {
             return Ok(None);
         };
 
-        let (coin, dec) = bitcrab_common::types::coin::Coin::decode(bitcrab_common::wire::decode::Decoder::new(&bytes))
-            .map_err(|e| StoreError::Decode(format!("failed to decode Coin: {}", e)))?;
+        let (coin, dec) = bitcrab_common::types::coin::Coin::decode(
+            bitcrab_common::wire::decode::Decoder::new(&bytes),
+        )
+        .map_err(|e| StoreError::Decode(format!("failed to decode Coin: {}", e)))?;
         dec.finish("Coin")
             .map_err(|e| StoreError::Decode(e.to_string()))?;
 
@@ -166,7 +171,10 @@ impl Store {
     /// Atomically update the UTXO set and current tip.
     pub async fn update_utxos(
         &self,
-        coins: std::collections::HashMap<bitcrab_common::types::transaction::OutPoint, crate::worker::CoinUpdate>,
+        coins: std::collections::HashMap<
+            bitcrab_common::types::transaction::OutPoint,
+            crate::worker::CoinUpdate,
+        >,
         best_block_hash: Option<bitcrab_common::types::hash::BlockHash>,
     ) -> Result<(), StoreError> {
         let (tx, rx) = oneshot::channel();

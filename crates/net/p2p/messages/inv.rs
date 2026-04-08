@@ -2,9 +2,7 @@
 
 use super::BitcoinMessage;
 use crate::p2p::message::Command;
-use bitcrab_common::{
-    wire::{encode::VarInt, error::DecodeError, Decoder, Encoder},
-};
+use bitcrab_common::wire::{encode::VarInt, error::DecodeError, Decoder, Encoder};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InvType {
@@ -44,8 +42,9 @@ impl BitcoinMessage for Inv {
     fn encode(&self) -> Vec<u8> {
         let mut enc = Encoder::new().encode_field(&VarInt(self.inventory.len() as u64));
         for item in &self.inventory {
-            enc = enc.encode_field(&(item.inv_type as u32))
-                     .encode_field(&item.hash);
+            enc = enc
+                .encode_field(&(item.inv_type as u32))
+                .encode_field(&item.hash);
         }
         enc.finish()
     }

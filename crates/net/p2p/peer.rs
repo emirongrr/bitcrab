@@ -100,7 +100,10 @@ struct PeerActor {
 impl Actor for PeerActor {
     type Message = PeerMessage;
 
-    fn on_start(&mut self, ctx: &mut Context<Self>) -> impl std::future::Future<Output = Result<(), ActorError>> + Send {
+    fn on_start(
+        &mut self,
+        ctx: &mut Context<Self>,
+    ) -> impl std::future::Future<Output = Result<(), ActorError>> + Send {
         let handle = ctx.handle();
         let mut reader = self.reader.take().expect("reader already taken");
         let magic = self.magic;
@@ -108,7 +111,7 @@ impl Actor for PeerActor {
 
         async move {
             info!("[{}] starting peer actor and reader task", addr);
-            
+
             // Spawn Socket Reader Task
             tokio::spawn(async move {
                 let mut read_buf = BytesMut::with_capacity(1024 * 64);
@@ -156,9 +159,13 @@ impl Actor for PeerActor {
                 let mut interval = tokio::time::interval(Duration::from_secs(120));
                 loop {
                     interval.tick().await;
-                    if ping_handle.cast(PeerMessage::Send(Message::Ping(Ping {
-                        nonce: rand::random(),
-                    }))).await.is_err() {
+                    if ping_handle
+                        .cast(PeerMessage::Send(Message::Ping(Ping {
+                            nonce: rand::random(),
+                        })))
+                        .await
+                        .is_err()
+                    {
                         break;
                     }
                 }
@@ -186,7 +193,7 @@ impl Actor for PeerActor {
                 }
                 PeerMessage::Incoming(msg) => {
                     if let Err(e) = self.handle_incoming(msg, ctx.handle()).await {
-                         debug!("[{}] error handling incoming message: {}", self.addr, e);
+                        debug!("[{}] error handling incoming message: {}", self.addr, e);
                     }
                 }
                 PeerMessage::GetInfo(tx) => {
@@ -210,10 +217,19 @@ impl Actor for PeerActor {
         }
     }
 
-    fn on_stop(&mut self, _ctx: &mut Context<Self>) -> impl std::future::Future<Output = ()> + Send {
+    fn on_stop(
+        &mut self,
+        _ctx: &mut Context<Self>,
+    ) -> impl std::future::Future<Output = ()> + Send {
         async move {
             info!("[{}] PeerActor terminated", self.addr);
-            let _ = self.table.actor().cast(crate::p2p::peer_table::PeerTableMessage::RemovePeer(self.addr)).await;
+            let _ = self
+                .table
+                .actor()
+                .cast(crate::p2p::peer_table::PeerTableMessage::RemovePeer(
+                    self.addr,
+                ))
+                .await;
         }
     }
 }
@@ -227,7 +243,11 @@ impl PeerActor {
         Ok(())
     }
 
-    async fn handle_incoming(&mut self, msg: Message, self_actor: ActorRef<PeerMessage>) -> Result<(), P2pError> {
+    async fn handle_incoming(
+        &mut self,
+        msg: Message,
+        self_actor: ActorRef<PeerMessage>,
+    ) -> Result<(), P2pError> {
         match msg {
             Message::Ping(ping) => {
                 self.send_to_stream(&Message::Pong(Pong { nonce: ping.nonce }))
@@ -239,14 +259,18 @@ impl PeerActor {
                     self.latency = Some(sent_at.elapsed());
                 }
             }
-            
+
             // All other protocol messages are forwarded to the dispatcher
             other => {
                 let handle = PeerHandle {
                     addr: self.addr,
                     actor: self_actor,
                 };
-                if let Err(e) = self.dispatcher.cast(DispatchMessage::PeerMessage(handle, other)).await {
+                if let Err(e) = self
+                    .dispatcher
+                    .cast(DispatchMessage::PeerMessage(handle, other))
+                    .await
+                {
                     warn!("[{}] failed to dispatch message: {}", self.addr, e);
                     return Err(P2pError::ConnectionClosed);
                 }
@@ -289,7 +313,7 @@ impl PeerHandle {
         };
 
         let actor_handle = actor.spawn();
-        
+
         Self {
             addr,
             actor: actor_handle,

@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 use tokio::time::interval;
-use tracing::{info, debug};
+use tracing::{debug, info};
 
 use super::{
     actor::{Actor, ActorError, Context},
@@ -65,11 +65,15 @@ impl DiscoveryActor {
                 Ok(Ok(addrs)) => {
                     let count = addrs.len();
                     // In a production Bitcoin node, we'd use a special NetAddr with services=0 for DNS seeds
-                   let net_addrs = addrs.into_iter().map(|a| {
-                        crate::p2p::messages::addr::NetAddr::from_socket_addr(a)
-                   }).collect();
-                   
-                    let _ = self.peer_table.add_addresses(net_addrs, "0.0.0.0:0".parse().unwrap()).await;
+                    let net_addrs = addrs
+                        .into_iter()
+                        .map(|a| crate::p2p::messages::addr::NetAddr::from_socket_addr(a))
+                        .collect();
+
+                    let _ = self
+                        .peer_table
+                        .add_addresses(net_addrs, "0.0.0.0:0".parse().unwrap())
+                        .await;
                     debug!("[discovery] DNS seed {} → {} addresses", seed, count);
                 }
                 _ => debug!("[discovery] DNS seed {} failed", seed),
@@ -81,7 +85,10 @@ impl DiscoveryActor {
 impl Actor for DiscoveryActor {
     type Message = DiscoveryMessage;
 
-    fn on_start(&mut self, ctx: &mut Context<Self>) -> impl std::future::Future<Output = Result<(), ActorError>> + Send {
+    fn on_start(
+        &mut self,
+        ctx: &mut Context<Self>,
+    ) -> impl std::future::Future<Output = Result<(), ActorError>> + Send {
         let handle = ctx.handle();
         async move {
             info!("[discovery] starting discovery actor");

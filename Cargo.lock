@@ -299,6 +299,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "bitcrab-consensus"
+version = "0.1.0"
+dependencies = [
+ "bitcrab-common",
+ "bitcrab-net",
+ "bitcrab-script",
+ "bitcrab-storage",
+ "thiserror",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "bitcrab-monitor"
 version = "0.1.0"
 dependencies = [
@@ -335,6 +348,7 @@ name = "bitcrab-node"
 version = "0.1.0"
 dependencies = [
  "bitcrab-common",
+ "bitcrab-consensus",
  "bitcrab-net",
  "bitcrab-rpc",
  "bitcrab-script",
@@ -390,6 +404,7 @@ name = "bitcrab-test"
 version = "0.1.0"
 dependencies = [
  "bitcrab-common",
+ "bitcrab-consensus",
  "bitcrab-net",
  "bitcrab-node",
  "bitcrab-storage",

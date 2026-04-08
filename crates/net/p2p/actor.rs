@@ -77,15 +77,25 @@ pub trait Actor: Sized + Send + 'static {
     type Message: Send + 'static;
 
     /// Handle an incoming message.
-    fn handle(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> impl std::future::Future<Output = Result<(), ActorError>> + Send;
+    fn handle(
+        &mut self,
+        msg: Self::Message,
+        ctx: &mut Context<Self>,
+    ) -> impl std::future::Future<Output = Result<(), ActorError>> + Send;
 
     /// Hook executed when the actor starts.
-    fn on_start(&mut self, _ctx: &mut Context<Self>) -> impl std::future::Future<Output = Result<(), ActorError>> + Send {
+    fn on_start(
+        &mut self,
+        _ctx: &mut Context<Self>,
+    ) -> impl std::future::Future<Output = Result<(), ActorError>> + Send {
         async { Ok(()) }
     }
 
     /// Hook executed when the actor stops.
-    fn on_stop(&mut self, _ctx: &mut Context<Self>) -> impl std::future::Future<Output = ()> + Send {
+    fn on_stop(
+        &mut self,
+        _ctx: &mut Context<Self>,
+    ) -> impl std::future::Future<Output = ()> + Send {
         async {}
     }
 
@@ -115,4 +125,3 @@ pub trait Actor: Sized + Send + 'static {
         handle
     }
 }
-

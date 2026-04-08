@@ -1,0 +1,21 @@
+[package]
+name           = "bitcrab-consensus"
+description    = "Bitcoin Consensus Engine (Validator, CoinsView, ChainManager)"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+
+[lib]
+path = "lib.rs"
+
+[dependencies]
+# Internal
+bitcrab-common.workspace  = true
+bitcrab-storage.workspace = true
+bitcrab-script.workspace  = true
+bitcrab-net = { workspace = true }
+
+# External
+tokio.workspace    = true
+tracing.workspace  = true
+thiserror.workspace = true

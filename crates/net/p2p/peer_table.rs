@@ -122,7 +122,9 @@ impl Actor for PeerTableActor {
                     }
                 }
                 PeerTableMessage::GetBestAddress(tx) => {
-                    let best = self.addr_man.select_best_ipv4(&[])
+                    let best = self
+                        .addr_man
+                        .select_best_ipv4(&[])
                         .or_else(|| self.addr_man.select_best(&[]));
                     let _ = tx.send(best);
                 }
@@ -209,7 +211,8 @@ impl PeerTable {
     }
 
     pub async fn get_best_address(&self) -> Result<Option<SocketAddr>, ActorError> {
-        self.actor.call(|tx| PeerTableMessage::GetBestAddress(tx)).await
+        self.actor
+            .call(|tx| PeerTableMessage::GetBestAddress(tx))
+            .await
     }
 }
-

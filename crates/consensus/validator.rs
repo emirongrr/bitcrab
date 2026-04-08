@@ -3,14 +3,14 @@
 //! Implements the rules for validating Bitcoin transactions and blocks.
 //! Matches Bitcoin Core's `src/consensus/tx_verify.cpp` and `src/validation.cpp`.
 
-use bitcrab_common::types::transaction::Transaction;
 use bitcrab_common::types::amount::Amount;
+use bitcrab_common::types::transaction::Transaction;
 use thiserror::Error;
 
-use bitcrab_script::interpreter::ScriptInterpreter;
 use bitcrab_common::types::undo::BlockUndo;
+use bitcrab_script::interpreter::ScriptInterpreter;
 
-use super::coins_view::CoinsView;
+use crate::coins_view::{CoinsView, CoinsViewCache};
 
 /// Errors that can occur during consensus validation.
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -51,13 +51,13 @@ impl TransactionValidator {
     /// These checks don't need the UTXO set or blockchain context.
     pub fn check_transaction(tx: &Transaction) -> Result<(), ValidationError> {
         // 1. Basic size checks (handled during decoding, but we can double check limits)
-        
+
         // 2. Ensure inputs and outputs are not empty
         if tx.inputs.is_empty() {
-             return Err(ValidationError::NoInputs);
+            return Err(ValidationError::NoInputs);
         }
         if tx.outputs.is_empty() {
-             return Err(ValidationError::NoOutputs);
+            return Err(ValidationError::NoOutputs);
         }
 
         // 3. Check for overflow and range of outputs
@@ -66,16 +66,17 @@ impl TransactionValidator {
             if !output.value.is_valid() {
                 return Err(ValidationError::AmountOutOfRange);
             }
-            total_output_value = total_output_value.checked_add(output.value)
+            total_output_value = total_output_value
+                .checked_add(output.value)
                 .ok_or(ValidationError::TotalAmountOutOfRange)?;
         }
-        
+
         if !total_output_value.is_valid() {
             return Err(ValidationError::TotalAmountOutOfRange);
         }
 
         // 4. Check for duplicate inputs (optional here, but good for early rejection)
-        
+
         Ok(())
     }
 
@@ -97,19 +98,22 @@ impl TransactionValidator {
 
         // 2. Ensure all inputs exist in the UTXO set and sum their values
         for input in &tx.inputs {
-            let coin = view.get_coin(&input.previous_output)
-                .ok_or_else(|| ValidationError::InputMissingOrSpent(input.previous_output.clone()))?;
-            
-            total_input_value = total_input_value.checked_add(coin.output.value)
+            let coin = view.get_coin(&input.previous_output).ok_or_else(|| {
+                ValidationError::InputMissingOrSpent(input.previous_output.clone())
+            })?;
+
+            total_input_value = total_input_value
+                .checked_add(coin.output.value)
                 .ok_or(ValidationError::TotalAmountOutOfRange)?;
-            
+
             spent_coins.push(coin.clone());
         }
 
         // 3. Calculate total output value
         let mut total_output_value = Amount::ZERO;
         for output in &tx.outputs {
-            total_output_value = total_output_value.checked_add(output.value)
+            total_output_value = total_output_value
+                .checked_add(output.value)
                 .ok_or(ValidationError::TotalAmountOutOfRange)?;
         }
 
@@ -119,23 +123,25 @@ impl TransactionValidator {
         }
 
         // 5. Calculate fee
-        let fee = total_input_value.checked_sub(total_output_value)
+        let fee = total_input_value
+            .checked_sub(total_output_value)
             .ok_or(ValidationError::NegativeFee)?;
 
         // 6. Signature / Script Verification (PHASE 5)
         for (i, input) in tx.inputs.iter().enumerate() {
             let coin = &spent_coins[i];
-            
+
             // Generate Sighash (SIGHASH_ALL = 1)
             let sighash = tx.signature_hash(i, &coin.output.script_pubkey, 1);
-            
+
             // Execute Script
             ScriptInterpreter::verify_script(
                 &input.script_sig,
                 &coin.output.script_pubkey,
                 &input.witness,
-                sighash
-            ).map_err(|_| ValidationError::ScriptFailure)?;
+                sighash,
+            )
+            .map_err(|_| ValidationError::ScriptFailure)?;
         }
 
         Ok((fee, spent_coins))
@@ -145,7 +151,7 @@ impl TransactionValidator {
     pub fn connect_block<V: CoinsView>(
         block: &bitcrab_common::types::block::Block,
         height: bitcrab_common::types::block::BlockHeight,
-        view: &mut super::coins_view::CoinsViewCache<V>,
+        view: &mut CoinsViewCache<V>,
     ) -> Result<(Amount, BlockUndo), ValidationError> {
         // 1. Basic block structure checks
         if block.transactions.is_empty() {
@@ -163,7 +169,7 @@ impl TransactionValidator {
 
         // 3. First transaction must be coinbase
         if !block.transactions[0].is_coinbase() {
-             return Err(ValidationError::InvalidCoinbase);
+            return Err(ValidationError::InvalidCoinbase);
         }
 
         // 4. Stateless checks for all transactions
@@ -178,7 +184,8 @@ impl TransactionValidator {
         // (Skipping coinbase which is handled separately)
         for tx in block.transactions.iter().skip(1) {
             let (fee, spent_coins) = Self::contextual_check_transaction(tx, view, height)?;
-            total_fees = total_fees.checked_add(fee)
+            total_fees = total_fees
+                .checked_add(fee)
                 .ok_or(ValidationError::TotalAmountOutOfRange)?;
 
             // Record undo data
@@ -195,7 +202,14 @@ impl TransactionValidator {
             let txid = tx.txid();
             for (vout, output) in tx.outputs.iter().enumerate() {
                 let coin = bitcrab_common::types::coin::Coin::new(output.clone(), height, false);
-                view.add_coin(bitcrab_common::types::transaction::OutPoint { txid, vout: vout as u32 }, coin, false);
+                view.add_coin(
+                    bitcrab_common::types::transaction::OutPoint {
+                        txid,
+                        vout: vout as u32,
+                    },
+                    coin,
+                    false,
+                );
             }
         }
 
@@ -204,7 +218,14 @@ impl TransactionValidator {
         let txid = coinbase_tx.txid();
         for (vout, output) in coinbase_tx.outputs.iter().enumerate() {
             let coin = bitcrab_common::types::coin::Coin::new(output.clone(), height, true);
-            view.add_coin(bitcrab_common::types::transaction::OutPoint { txid, vout: vout as u32 }, coin, false);
+            view.add_coin(
+                bitcrab_common::types::transaction::OutPoint {
+                    txid,
+                    vout: vout as u32,
+                },
+                coin,
+                false,
+            );
         }
 
         // 6. Set the best block in the view

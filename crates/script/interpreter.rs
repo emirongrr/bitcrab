@@ -6,8 +6,8 @@ use super::opcode::Opcode;
 use super::stack::{ScriptStack, StackError};
 use bitcrab_common::types::hash::{hash160, hash256};
 use bitcrab_common::types::script::ScriptBuf;
+use secp256k1::{ecdsa::Signature, Message, PublicKey, Secp256k1};
 use thiserror::Error;
-use secp256k1::{Secp256k1, Message, PublicKey, ecdsa::Signature};
 
 #[derive(Debug, Error)]
 pub enum InterpreterError {
@@ -43,7 +43,7 @@ impl ScriptInterpreter {
         script_sig: &ScriptBuf,
         script_pubkey: &ScriptBuf,
         _witness: &[Vec<u8>], // TODO: Support SegWit
-        sighash: [u8; 32],   // Pre-computed transaction digest
+        sighash: [u8; 32],    // Pre-computed transaction digest
     ) -> Result<bool, InterpreterError> {
         let mut interpreter = Self::new(sighash);
 
@@ -76,7 +76,7 @@ impl ScriptInterpreter {
                 if pc + len > bytes.len() {
                     return Err(InterpreterError::TruncatedScript);
                 }
-                self.stack.push(bytes[pc..pc+len].to_vec())?;
+                self.stack.push(bytes[pc..pc + len].to_vec())?;
                 pc += len;
             } else {
                 let opcode = Opcode::from(opcode_byte);
@@ -109,17 +109,17 @@ impl ScriptInterpreter {
                     Opcode::OP_CHECKSIG => {
                         let pubkey_bytes = self.stack.pop()?;
                         let sig_bytes = self.stack.pop()?;
-                        
+
                         // Bitcoin Rule: Empty signature is treated as success-fails-false (fails verification but doesn't crash)
                         if sig_bytes.is_empty() {
                             self.stack.push(vec![])?;
                         } else {
                             // 1. Strip sighash type byte (last byte) from DER signature
                             let (sig_der, _sighash_type) = sig_bytes.split_at(sig_bytes.len() - 1);
-                            
+
                             // 2. Verify using secp256k1
                             let secp = Secp256k1::verification_only();
-                            
+
                             let msg = Message::from_digest(self.sighash);
                             let pubkey = PublicKey::from_slice(&pubkey_bytes)
                                 .map_err(|_| InterpreterError::InvalidCryptoData)?;

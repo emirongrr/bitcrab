@@ -32,7 +32,7 @@ impl OutPoint {
 impl BitcoinEncode for OutPoint {
     fn encode(&self, enc: Encoder) -> Encoder {
         enc.encode_field(self.txid.as_bytes())
-           .encode_field(&self.vout)
+            .encode_field(&self.vout)
     }
 }
 
@@ -40,10 +40,13 @@ impl BitcoinDecode for OutPoint {
     fn decode(dec: Decoder) -> Result<(Self, Decoder), DecodeError> {
         let (txid_bytes, dec) = dec.decode_field::<[u8; 32]>("OutPoint::txid")?;
         let (vout, dec) = dec.decode_field::<u32>("OutPoint::vout")?;
-        Ok((Self {
-            txid: Txid::from_bytes(txid_bytes),
-            vout,
-        }, dec))
+        Ok((
+            Self {
+                txid: Txid::from_bytes(txid_bytes),
+                vout,
+            },
+            dec,
+        ))
     }
 }
 
@@ -67,8 +70,8 @@ impl TxIn {
 impl BitcoinEncode for TxIn {
     fn encode(&self, enc: Encoder) -> Encoder {
         enc.encode_field(&self.previous_output)
-           .encode_field(&self.script_sig)
-           .encode_field(&self.sequence)
+            .encode_field(&self.script_sig)
+            .encode_field(&self.sequence)
     }
 }
 
@@ -77,12 +80,15 @@ impl BitcoinDecode for TxIn {
         let (prev, dec) = dec.decode_field::<OutPoint>("TxIn::previous_output")?;
         let (sig, dec) = dec.decode_field::<ScriptBuf>("TxIn::script_sig")?;
         let (seq, dec) = dec.decode_field::<u32>("TxIn::sequence")?;
-        Ok((Self {
-            previous_output: prev,
-            script_sig: sig,
-            sequence: seq,
-            witness: Vec::new(),
-        }, dec))
+        Ok((
+            Self {
+                previous_output: prev,
+                script_sig: sig,
+                sequence: seq,
+                witness: Vec::new(),
+            },
+            dec,
+        ))
     }
 }
 
@@ -96,7 +102,7 @@ pub struct TxOut {
 impl BitcoinEncode for TxOut {
     fn encode(&self, enc: Encoder) -> Encoder {
         enc.encode_field(&self.value)
-           .encode_field(&self.script_pubkey)
+            .encode_field(&self.script_pubkey)
     }
 }
 
@@ -104,10 +110,13 @@ impl BitcoinDecode for TxOut {
     fn decode(dec: Decoder) -> Result<(Self, Decoder), DecodeError> {
         let (val, dec) = dec.decode_field::<Amount>("TxOut::value")?;
         let (script, dec) = dec.decode_field::<ScriptBuf>("TxOut::script_pubkey")?;
-        Ok((Self {
-            value: val,
-            script_pubkey: script,
-        }, dec))
+        Ok((
+            Self {
+                value: val,
+                script_pubkey: script,
+            },
+            dec,
+        ))
     }
 }
 
@@ -141,10 +150,11 @@ impl Transaction {
     /// Calculate the transaction hash (TXID).
     pub fn txid(&self) -> super::hash::Txid {
         let mut enc = Encoder::new();
-        enc = enc.encode_field(&self.version)
-                 .encode_field(&VarList(&self.inputs))
-                 .encode_field(&VarList(&self.outputs))
-                 .encode_field(&self.lock_time);
+        enc = enc
+            .encode_field(&self.version)
+            .encode_field(&VarList(&self.inputs))
+            .encode_field(&VarList(&self.outputs))
+            .encode_field(&self.lock_time);
         super::hash::Txid::hash(&enc.finish())
     }
 
@@ -182,11 +192,12 @@ impl Transaction {
 
         // 5. Serialize and append sighash type
         let mut enc = Encoder::new();
-        enc = enc.encode_field(&tx_copy.version)
-                 .encode_field(&VarList(&tx_copy.inputs))
-                 .encode_field(&VarList(&tx_copy.outputs))
-                 .encode_field(&tx_copy.lock_time)
-                 .encode_field(&sighash_type);
+        enc = enc
+            .encode_field(&tx_copy.version)
+            .encode_field(&VarList(&tx_copy.inputs))
+            .encode_field(&VarList(&tx_copy.outputs))
+            .encode_field(&tx_copy.lock_time)
+            .encode_field(&sighash_type);
 
         // 6. Double-SHA256
         super::hash::hash256(&enc.finish())
@@ -204,23 +215,25 @@ impl Transaction {
 impl BitcoinEncode for Transaction {
     fn encode(&self, enc: Encoder) -> Encoder {
         if self.is_segwit() {
-            let mut enc = enc.encode_field(&self.version)
-                             .encode_field(&0u8) // Marker
-                             .encode_field(&1u8); // Flag
-            
-            enc = enc.encode_field(&VarList(&self.inputs))
-                     .encode_field(&VarList(&self.outputs));
-            
+            let mut enc = enc
+                .encode_field(&self.version)
+                .encode_field(&0u8) // Marker
+                .encode_field(&1u8); // Flag
+
+            enc = enc
+                .encode_field(&VarList(&self.inputs))
+                .encode_field(&VarList(&self.outputs));
+
             for input in &self.inputs {
                 enc = enc.encode_field(&VarList(&input.witness));
             }
-            
+
             enc.encode_field(&self.lock_time)
         } else {
             enc.encode_field(&self.version)
-               .encode_field(&VarList(&self.inputs))
-               .encode_field(&VarList(&self.outputs))
-               .encode_field(&self.lock_time)
+                .encode_field(&VarList(&self.inputs))
+                .encode_field(&VarList(&self.outputs))
+                .encode_field(&self.lock_time)
         }
     }
 }
@@ -228,45 +241,51 @@ impl BitcoinEncode for Transaction {
 impl BitcoinDecode for Transaction {
     fn decode(dec: Decoder) -> Result<(Self, Decoder), DecodeError> {
         let (version, dec) = dec.decode_field::<u32>("Transaction::version")?;
-        
+
         let (marker, _peek_dec) = dec.decode_field::<u8>("Transaction::marker")?;
-        
+
         if marker == 0 {
             let (_, dec) = dec.decode_field::<u8>("Transaction::marker")?;
             let (flag, dec) = dec.decode_field::<u8>("Transaction::flag")?;
             if flag != 1 {
                 return Err(DecodeError::Custom("invalid SegWit flag".into()));
             }
-            
+
             let (mut inputs, dec) = dec.read_var_list::<TxIn>("Transaction::inputs")?;
             let (outputs, dec) = dec.read_var_list::<TxOut>("Transaction::outputs")?;
-            
+
             let mut dec = dec;
             for input in &mut inputs {
                 let (witness, next_dec) = dec.read_var_list::<Vec<u8>>("Transaction::witness")?;
                 input.witness = witness;
                 dec = next_dec;
             }
-            
+
             let (lock_time, dec) = dec.decode_field::<u32>("Transaction::lock_time")?;
-            
-            Ok((Self {
-                version,
-                inputs,
-                outputs,
-                lock_time,
-            }, dec))
+
+            Ok((
+                Self {
+                    version,
+                    inputs,
+                    outputs,
+                    lock_time,
+                },
+                dec,
+            ))
         } else {
             let (inputs, dec) = dec.read_var_list::<TxIn>("Transaction::inputs")?;
             let (outputs, dec) = dec.read_var_list::<TxOut>("Transaction::outputs")?;
             let (lock_time, dec) = dec.decode_field::<u32>("Transaction::lock_time")?;
-            
-            Ok((Self {
-                version,
-                inputs,
-                outputs,
-                lock_time,
-            }, dec))
+
+            Ok((
+                Self {
+                    version,
+                    inputs,
+                    outputs,
+                    lock_time,
+                },
+                dec,
+            ))
         }
     }
 }

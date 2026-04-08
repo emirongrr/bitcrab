@@ -209,7 +209,10 @@ impl<'a> Decoder<'a> {
     }
 
     /// Read a VarInt-prefixed list of items.
-    pub fn read_var_list<T: BitcoinDecode>(self, label: &'static str) -> Result<(Vec<T>, Self), DecodeError> {
+    pub fn read_var_list<T: BitcoinDecode>(
+        self,
+        label: &'static str,
+    ) -> Result<(Vec<T>, Self), DecodeError> {
         let (count, mut dec) = self.read_varint(label)?;
         let mut items = Vec::with_capacity(count as usize);
         for _ in 0..count {
@@ -220,7 +223,11 @@ impl<'a> Decoder<'a> {
         Ok((items, dec))
     }
 
-    pub fn read_bytes(mut self, n: usize, field: &'static str) -> Result<(Vec<u8>, Self), DecodeError> {
+    pub fn read_bytes(
+        mut self,
+        n: usize,
+        field: &'static str,
+    ) -> Result<(Vec<u8>, Self), DecodeError> {
         self.require(n, field)?;
         let v = self.data[self.pos..self.pos + n].to_vec();
         self.pos += n;

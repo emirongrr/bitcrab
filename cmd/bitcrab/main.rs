@@ -134,7 +134,7 @@ async fn main() -> eyre::Result<()> {
 async fn run_legacy_connect(addr: String, magic: Magic) -> eyre::Result<()> {
     use bitcrab_net::p2p::connection::connect;
     match connect(&addr, magic).await {
-        Ok((_manager, peer, _rx)) => {
+        Ok((_manager, peer)) => {
             let info = peer.get_info().await?;
             info!(
                 "Connected to peer: {} v{} UA:{}",

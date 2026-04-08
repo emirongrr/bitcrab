@@ -1,20 +1,24 @@
 //! BlockDownloadActor: Handles parallel block downloading from multiple peers.
 
-use tracing::{info, warn, debug};
 use std::collections::HashMap;
-use tokio::time::{interval, Instant, Duration};
 use std::sync::atomic::Ordering;
+use tokio::time::{interval, Duration, Instant};
+use tracing::{debug, info, warn};
 
 use crate::p2p::{
     actor::{Actor, ActorError, Context},
-    messages::{Message, getdata::GetData, inv::{InvVector, InvType}},
+    messages::{
+        getdata::GetData,
+        inv::{InvType, InvVector},
+        Message,
+    },
+    metrics::METRICS,
     peer::PeerHandle,
     peer_table::PeerTable,
-    metrics::METRICS,
 };
-use bitcrab_storage::Store;
 use bitcrab_common::types::hash::BlockHash;
 use bitcrab_common::wire::encode::BitcoinEncode;
+use bitcrab_storage::Store;
 
 pub enum BlockDownloadMessage {
     /// Announce new block hashes to download.
@@ -31,7 +35,8 @@ pub struct BlockDownloadActor {
     in_flight: HashMap<[u8; 32], (PeerHandle, Instant)>,
     queue: Vec<[u8; 32]>,
     /// Optional channel to notify when a block is successfully stored and ready for validation.
-    on_block_available: Option<tokio::sync::mpsc::Sender<(BlockHash, bitcrab_common::types::block::BlockHeight)>>,
+    on_block_available:
+        Option<tokio::sync::mpsc::Sender<(BlockHash, bitcrab_common::types::block::BlockHeight)>>,
 }
 
 impl BlockDownloadActor {
@@ -46,7 +51,10 @@ impl BlockDownloadActor {
     }
 
     /// Attach a listener for block connectivity events.
-    pub fn with_notifier(mut self, tx: tokio::sync::mpsc::Sender<(BlockHash, bitcrab_common::types::block::BlockHeight)>) -> Self {
+    pub fn with_notifier(
+        mut self,
+        tx: tokio::sync::mpsc::Sender<(BlockHash, bitcrab_common::types::block::BlockHeight)>,
+    ) -> Self {
         self.on_block_available = Some(tx);
         self
     }
@@ -69,7 +77,7 @@ impl BlockDownloadActor {
         // Limit in-flight requests to prevent overwhelming peers/memory.
         while !self.queue.is_empty() && self.in_flight.len() < 128 {
             let hash = self.queue.remove(0);
-            
+
             // Basic duplication check
             if self.in_flight.contains_key(&hash) {
                 continue;
@@ -78,8 +86,12 @@ impl BlockDownloadActor {
             let peer = &peers[peer_idx % peers.len()];
             peer_idx += 1;
 
-            debug!("[blocks] requesting block {} from {}", hex::encode(hash), peer.addr);
-            
+            debug!(
+                "[blocks] requesting block {} from {}",
+                hex::encode(hash),
+                peer.addr
+            );
+
             let getdata = GetData {
                 inventory: vec![InvVector {
                     inv_type: InvType::Block,
@@ -95,7 +107,11 @@ impl BlockDownloadActor {
         }
     }
 
-    async fn handle_block(&mut self, peer: PeerHandle, block: bitcrab_common::types::block::Block) -> Result<(), ActorError> {
+    async fn handle_block(
+        &mut self,
+        peer: PeerHandle,
+        block: bitcrab_common::types::block::Block,
+    ) -> Result<(), ActorError> {
         let hash_bytes = block.header.block_hash().as_bytes().to_owned();
         let hash = BlockHash::from_bytes(hash_bytes);
 
@@ -106,7 +122,10 @@ impl BlockDownloadActor {
             let height = match self.store.get_block_index(&hash) {
                 Ok(Some(idx)) => idx.height,
                 _ => {
-                    debug!("[blocks] ignoring block body without indexed header: {}", hash);
+                    debug!(
+                        "[blocks] ignoring block body without indexed header: {}",
+                        hash
+                    );
                     return Ok(());
                 }
             };
@@ -114,13 +133,19 @@ impl BlockDownloadActor {
             // 2. Persist full block to disk
             // Note: Bitcoin Core stores blocks in blk*.dat files.
             // We use tokio::task::spawn_blocking internally in store.store_block.
-            let raw_block = block.encode_message(); 
-            
-            if let Err(e) = self.store.store_block(block.header, height, raw_block).await {
+            let raw_block = block.encode_message();
+
+            if let Err(e) = self
+                .store
+                .store_block(block.header, height, raw_block)
+                .await
+            {
                 warn!("[blocks] failed to persist block {}: {}", hash, e);
             } else {
-                METRICS.total_blocks_downloaded.fetch_add(1, Ordering::Relaxed);
-                
+                METRICS
+                    .total_blocks_downloaded
+                    .fetch_add(1, Ordering::Relaxed);
+
                 // Notify consensus engine if a listener is attached
                 if let Some(ref tx) = self.on_block_available {
                     let _ = tx.send((hash, height)).await;
@@ -151,7 +176,10 @@ impl BlockExt for bitcrab_common::types::block::Block {
 impl Actor for BlockDownloadActor {
     type Message = BlockDownloadMessage;
 
-    fn on_start(&mut self, ctx: &mut Context<Self>) -> impl std::future::Future<Output = Result<(), ActorError>> + Send {
+    fn on_start(
+        &mut self,
+        ctx: &mut Context<Self>,
+    ) -> impl std::future::Future<Output = Result<(), ActorError>> + Send {
         let handle = ctx.handle();
         async move {
             info!("[blocks] starting block download actor");
@@ -182,14 +210,22 @@ impl Actor for BlockDownloadActor {
                 }
                 BlockDownloadMessage::Maintenance => {
                     let now = Instant::now();
-                    let timed_out: Vec<_> = self.in_flight.iter()
-                        .filter(|(_, (_, start))| now.duration_since(*start) > Duration::from_secs(60))
+                    let timed_out: Vec<_> = self
+                        .in_flight
+                        .iter()
+                        .filter(|(_, (_, start))| {
+                            now.duration_since(*start) > Duration::from_secs(60)
+                        })
                         .map(|(hash, _)| *hash)
                         .collect();
 
                     for hash in timed_out {
                         if let Some((peer, _)) = self.in_flight.remove(&hash) {
-                            warn!("[blocks] block {} timed out from {}", hex::encode(hash), peer.addr);
+                            warn!(
+                                "[blocks] block {} timed out from {}",
+                                hex::encode(hash),
+                                peer.addr
+                            );
                             self.queue.push(hash);
                         }
                     }

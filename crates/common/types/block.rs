@@ -197,7 +197,10 @@ pub struct Block {
 
 impl Block {
     pub fn new(header: BlockHeader, transactions: Vec<Transaction>) -> Self {
-        Self { header, transactions }
+        Self {
+            header,
+            transactions,
+        }
     }
 
     /// Calculate the Merkle Root of all transactions in this block.
@@ -205,11 +208,13 @@ impl Block {
     /// Bitcoin Core: `ComputeMerkleRoot()` in `src/consensus/merkle.cpp`.
     pub fn compute_merkle_root(&self) -> Hash256 {
         if self.transactions.is_empty() {
-             return Hash256::ZERO;
+            return Hash256::ZERO;
         }
 
         // 1. Initial level: TXIDs
-        let mut hashes: Vec<Hash256> = self.transactions.iter()
+        let mut hashes: Vec<Hash256> = self
+            .transactions
+            .iter()
             .map(|tx| Hash256::from_bytes(*tx.txid().as_bytes()))
             .collect();
 
@@ -237,7 +242,7 @@ impl Block {
 impl BitcoinEncode for Block {
     fn encode(&self, enc: Encoder) -> Encoder {
         enc.encode_field(&self.header)
-           .encode_field(&VarList(&self.transactions))
+            .encode_field(&VarList(&self.transactions))
     }
 }
 
@@ -245,7 +250,13 @@ impl BitcoinDecode for Block {
     fn decode(dec: Decoder) -> Result<(Self, Decoder), DecodeError> {
         let (header, dec) = dec.decode_field::<BlockHeader>("Block::header")?;
         let (transactions, dec) = dec.read_var_list::<Transaction>("Block::transactions")?;
-        Ok((Self { header, transactions }, dec))
+        Ok((
+            Self {
+                header,
+                transactions,
+            },
+            dec,
+        ))
     }
 }
 

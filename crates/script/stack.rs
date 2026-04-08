@@ -32,7 +32,10 @@ impl ScriptStack {
             return Err(StackError::Overflow(MAX_STACK_SIZE));
         }
         if item.len() > MAX_SCRIPT_ELEMENT_SIZE {
-            return Err(StackError::ElementTooLarge(item.len(), MAX_SCRIPT_ELEMENT_SIZE));
+            return Err(StackError::ElementTooLarge(
+                item.len(),
+                MAX_SCRIPT_ELEMENT_SIZE,
+            ));
         }
         self.items.push(item);
         Ok(())

@@ -48,6 +48,13 @@ impl BitcoinDecode for Coin {
         let (height, dec) = BlockHeight::decode(dec)?;
         let (is_coinbase, dec) = bool::decode(dec)?;
         let (output, dec) = TxOut::decode(dec)?;
-        Ok((Self { output, height, is_coinbase }, dec))
+        Ok((
+            Self {
+                output,
+                height,
+                is_coinbase,
+            },
+            dec,
+        ))
     }
 }

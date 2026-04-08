@@ -196,7 +196,8 @@ pub struct VarBytes<'a>(pub &'a [u8]);
 
 impl BitcoinEncode for VarBytes<'_> {
     fn encode(&self, enc: Encoder) -> Encoder {
-        enc.encode_field(&VarInt(self.0.len() as u64)).push_bytes(self.0)
+        enc.encode_field(&VarInt(self.0.len() as u64))
+            .push_bytes(self.0)
     }
 }
 

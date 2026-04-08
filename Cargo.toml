@@ -9,6 +9,7 @@ members = [
     "cmd/bitcrab",
     "cmd/monitor",
     "crates/script",
+    "crates/consensus",
     "test"
 ]
 
@@ -30,6 +31,7 @@ bitcrab-net    = { path = "crates/net" }
 bitcrab-node   = { path = "crates/node" }
 bitcrab-storage= { path = "crates/storage", features = ["rocksdb"] }
 bitcrab-script = { path = "crates/script" }
+bitcrab-consensus = { path = "crates/consensus" }
 bitcrab-rpc    = { path = "crates/net/rpc" }
 
 

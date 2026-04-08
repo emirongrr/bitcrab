@@ -10,10 +10,8 @@ use tokio::time::sleep;
 use tracing::{debug, info, warn};
 
 use crate::p2p::{
-    addr_man::AddrMan, errors::P2pError, message::Magic,
-    peer_manager::PeerManager, peer_table::PeerTable,
-    dispatcher::DispatcherActor, sync::SyncManager,
-    actor::Actor,
+    actor::Actor, addr_man::AddrMan, dispatcher::DispatcherActor, errors::P2pError, message::Magic,
+    peer_manager::PeerManager, peer_table::PeerTable, sync::SyncManager,
 };
 
 /// Target number of simultaneous peer connections.
@@ -53,13 +51,17 @@ pub async fn run_p2p_maintenance(
     use crate::p2p::discovery::DiscoveryActor;
     use crate::p2p::initiator::ConnectionInitiator;
 
-    info!("[net] starting modern actor-based maintenance for network {:?}", config.magic);
+    info!(
+        "[net] starting modern actor-based maintenance for network {:?}",
+        config.magic
+    );
 
     // 1. Start Discovery Actor (DNS seeding and periodic harvesting)
     let _discovery = DiscoveryActor::new(config.magic, config.port, manager.table.clone()).spawn();
 
     // 2. Start Connection Initiator (proactive outbound management)
-    let _initiator = ConnectionInitiator::new(manager.table.clone(), manager.clone(), TARGET_OUTBOUND).spawn();
+    let _initiator =
+        ConnectionInitiator::new(manager.table.clone(), manager.clone(), TARGET_OUTBOUND).spawn();
 
     // 3. Start Inbound Accept Loop
     let accept_manager = std::sync::Arc::clone(&manager);
@@ -76,16 +78,19 @@ pub async fn run_p2p_maintenance(
 }
 
 /// Start the network with the full actor-system initialized.
-pub async fn start_network(config: NetworkConfig, store: bitcrab_storage::Store) -> Result<(), P2pError> {
+pub async fn start_network(
+    config: NetworkConfig,
+    store: bitcrab_storage::Store,
+) -> Result<(), P2pError> {
     let table = PeerTable::new(AddrMan::new());
-    
+
     // Initialize Coordination Layers
     let sync = SyncManager::new(store.clone(), table.clone(), None);
     let dispatcher = DispatcherActor::new(table.clone(), sync).spawn();
-    
+
     // Initialize Peer Manager with Dispatcher reference
     let manager = std::sync::Arc::new(PeerManager::new(config.magic, table, dispatcher));
-    
+
     run_p2p_maintenance(manager, config).await
 }
 
@@ -117,9 +122,9 @@ async fn accept_loop(manager: std::sync::Arc<PeerManager>, port: u16) {
 
                 tokio::spawn(async move {
                     if let Err(e) = mg.handshake(stream, addr, true).await {
-                         warn!("Inbound handshake with {} failed: {}", addr, e);
+                        warn!("Inbound handshake with {} failed: {}", addr, e);
                     } else {
-                         info!("Inbound handshake complete: {}", addr);
+                        info!("Inbound handshake complete: {}", addr);
                     }
                 });
             }

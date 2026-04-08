@@ -3,7 +3,7 @@
 use super::BitcoinMessage;
 use crate::p2p::message::Command;
 pub use bitcrab_common::types::block::Block;
-use bitcrab_common::wire::{error::DecodeError, Decoder, Encoder, BitcoinEncode, BitcoinDecode};
+use bitcrab_common::wire::{error::DecodeError, BitcoinDecode, BitcoinEncode, Decoder, Encoder};
 
 impl BitcoinMessage for Block {
     const COMMAND: Command = Command::Block;

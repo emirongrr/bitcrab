@@ -39,7 +39,10 @@ pub enum WriteMessage {
     },
     /// Batch update the UTXO set.
     UpdateUtxoSet {
-        coins: std::collections::HashMap<bitcrab_common::types::transaction::OutPoint, crate::worker::CoinUpdate>,
+        coins: std::collections::HashMap<
+            bitcrab_common::types::transaction::OutPoint,
+            crate::worker::CoinUpdate,
+        >,
         best_block: Option<bitcrab_common::types::hash::BlockHash>,
         reply_to: oneshot::Sender<Result<(), StoreError>>,
     },
@@ -230,7 +233,7 @@ impl StorageWorker {
     ) -> Result<(), StoreError> {
         let mut write = self.backend.begin_write()?;
         let value = Encoder::new().encode_field(&undo_data).finish();
-        
+
         write.put(tables::BLOCK_UNDO, block_hash.as_bytes(), &value)?;
         write.commit()
     }
