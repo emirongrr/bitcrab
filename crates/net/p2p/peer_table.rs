@@ -1,7 +1,7 @@
 //! PeerTableActor: The central registry for all active peer connections.
 //! Replaces the old PeerManager with an actor-based registry.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::net::{SocketAddr, IpAddr};
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{Instant, Duration};

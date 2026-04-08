@@ -26,7 +26,7 @@ use bitcrab_common::types::{
 };
 
 use thiserror::Error;
-use tracing::info;
+use tracing::{info, debug};
 
 // ── Error ─────────────────────────────────────────────────────────────────────
 

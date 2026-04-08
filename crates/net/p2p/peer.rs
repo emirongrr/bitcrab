@@ -88,6 +88,10 @@ struct PeerActor {
     start_height: i32,
     services: u64,
 
+    // Internal State
+    pending_pings: HashMap<u64, Instant>,
+    latency: Option<Duration>,
+    ban_list: Arc<Mutex<HashMap<std::net::IpAddr, Instant>>>,
     conntime: Instant,
     read_buf: BytesMut,
 }

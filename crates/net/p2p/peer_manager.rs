@@ -26,7 +26,7 @@ use crate::p2p::{
     errors::P2pError,
     message::Magic,
     messages::{BitcoinMessage, version::Version, verack::Verack},
-    peer::{PeerHandle, PeerInfo},
+    peer::PeerHandle,
     peer_table::PeerTable,
 };
 
