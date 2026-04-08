@@ -13,7 +13,11 @@ use crate::p2p::{
     errors::P2pError,
     message::Magic,
     peer_manager::PeerManager,
+    peer_table::PeerTable,
+    addr_man::AddrMan,
+    messages::Message,
 };
+
 
 /// Signet DNS seeds.
 ///
@@ -65,80 +69,68 @@ impl NetworkConfig {
     }
 }
 
-/// Start the Bitcoin P2P network.
+/// Start the Bitcoin P2P network services.
 ///
-/// Seeds from DNS, connects to peers, and runs the peer maintenance loop.
-/// This function runs indefinitely.
-///
-/// Bitcoin Core: AppInitMain() → CConnman::Start() in src/net.cpp
-pub async fn start_network(config: NetworkConfig) -> Result<(), P2pError> {
-    println!("DEBUG: network::start_network BEGIN");
-    // Load peer table from disk if available.
-    // Bitcoin Core: CAddrMan loaded from peers.dat in AppInitMain()
-    let data_dir = std::path::PathBuf::from(".");
-    let manager = std::sync::Arc::new(PeerManager::new(config.magic)
-        .with_data_dir(data_dir));
-
-    let known_count = manager.table.lock().unwrap().len();
-    if known_count > 0 {
-        info!("loaded {} known peers from disk", known_count);
-    }
-
-    // Seed from DNS — adds new addresses to the table.
+/// This involves:
+/// 1. DNS Seeding
+/// 2. Listening for inbound connections
+/// 3. Maintaining outbound connections
+pub async fn run_p2p_maintenance(
+    manager: std::sync::Arc<PeerManager>,
+    config: NetworkConfig,
+) -> Result<(), P2pError> {
+    // 1. Initial DNS Seeding
     let seeds = match config.magic {
         Magic::Signet  => SIGNET_DNS_SEEDS,
         Magic::Mainnet => MAINNET_DNS_SEEDS,
         _              => SIGNET_DNS_SEEDS,
     };
 
-    println!("DEBUG: network::start_network about to seed DNS");
+    info!("[net] seeding from DNS for network {:?}", config.magic);
     manager.seed_from_dns(seeds, config.port).await;
-    println!("DEBUG: network::start_network DNS seed finished");
-    println!("DEBUG: about to lock table for count");
-    let count = {
-        let table = manager.table.lock().unwrap();
-        println!("DEBUG: table lock acquired for count");
-        let len = table.len();
-        let conn = table.connectable_count();
-        (len, conn)
-    };
-    println!("DEBUG: table lock released, count: {}/{}", count.0, count.1);
-    
-    // Start listening for inbound connections.
-    println!("DEBUG: starting accept_loop");
+
+    // 2. Start Accept Loop
     let accept_manager = std::sync::Arc::clone(&manager);
     tokio::spawn(async move {
         accept_loop(accept_manager, config.port).await;
     });
 
-    // Initial connections.
-    println!("DEBUG: network::start_network about to fill_connections");
+    // 3. Initial Outbound Connections
     fill_connections(&manager, TARGET_OUTBOUND).await;
-    println!("DEBUG: network::start_network fill_connections spawned");
 
-    // Main loop: maintain connections, check health.
-    //
-    // Bitcoin Core: CConnman::ThreadOpenConnections() in src/net.cpp
+    // 4. Maintenance Loop
     loop {
         sleep(HEALTH_CHECK_INTERVAL).await;
 
-        // Remove dead peers.
-        manager.prune_disconnected();
+        let count = manager.table.get_peer_count().await.unwrap_or(0);
+        debug!("[net] active peers: {} (target: {})", count, TARGET_OUTBOUND);
 
-        let count = manager.peer_count();
-        info!("active peers: {} (outbound limit: {}, inbound limit: {})", count, TARGET_OUTBOUND, MAX_INBOUND);
-
-        // Refill if below target.
+        // Refill outbound connections if below target.
         if count < TARGET_OUTBOUND {
             fill_connections(&manager, TARGET_OUTBOUND - count).await;
         }
 
-        // Re-seed if table is running low.
-        if manager.table.lock().unwrap().connectable_count() < TARGET_OUTBOUND * 2 {
+        // Periodic Re-seeding if extremely low on addresses.
+        let low_addresses = {
+            let am = manager.addr_man.lock().unwrap();
+            am.connectable_count() < TARGET_OUTBOUND * 2
+        };
+
+        if low_addresses {
+            debug!("[net] address book low, re-seeding...");
             manager.seed_from_dns(seeds, config.port).await;
         }
     }
 }
+
+/// Legacy start_network for backward compatibility (optional, but refactored to use new logic).
+pub async fn start_network(config: NetworkConfig) -> Result<(), P2pError> {
+    let table = PeerTable::new(AddrMan::new());
+    let manager = std::sync::Arc::new(PeerManager::new(config.magic, table));
+    run_p2p_maintenance(manager, config).await
+}
+
+
 
 async fn accept_loop(manager: std::sync::Arc<PeerManager>, port: u16) {
     let listener = match tokio::net::TcpListener::bind(format!("0.0.0.0:{}", port)).await {
@@ -175,18 +167,19 @@ async fn accept_loop(manager: std::sync::Arc<PeerManager>, port: u16) {
                             // Process messages
                             loop {
                                 match incoming_rx.recv().await {
-                                    Some(crate::p2p::messages::Message::Addr(addr_msg)) => {
+                                    Some(Message::Addr(addr_msg)) => {
                                         let new_addrs: Vec<std::net::SocketAddr> = addr_msg.addresses.into_iter().map(|n| {
                                             std::net::SocketAddr::new(
                                                 std::net::IpAddr::V6(std::net::Ipv6Addr::from(n.ip)),
                                                 n.port
                                             )
                                         }).collect();
-                                        mg.table.lock().unwrap().add_many(new_addrs, addr);
+                                        mg.addr_man.lock().unwrap().add_many(new_addrs, addr);
                                     }
+
                                     // Ping is auto-handled by peer.rs reader task
-                                    Some(_msg) => {
-                                        // Forward block/inv messages to SyncManager here later
+                                    Some(other) => {
+                                        debug!("[sync] ignoring message during header wait: {other:?}");
                                     }
                                     None => {
                                         warn!("Inbound connection to {} closed", addr);
@@ -194,8 +187,8 @@ async fn accept_loop(manager: std::sync::Arc<PeerManager>, port: u16) {
                                     }
                                 }
                             }
-                            mg.remove_peer(&addr);
                         }
+
                         Err(e) => {
                             warn!("Inbound handshake with {} failed: {}", addr, e);
                         }
@@ -221,12 +214,13 @@ async fn fill_connections(manager: &std::sync::Arc<PeerManager>, needed: usize) 
         println!("DEBUG: network::fill_connections loop attempt={}", attempts);
         attempts += 1;
 
-        let active = manager.active_addrs();
+        let active = Vec::new(); // TODO: get from PeerTable if needed
 
         let addr = {
-            let guard = manager.table.lock().unwrap();
-            guard.select_best_ipv4(&active).or_else(|| guard.select_best(&active))
+            let am = manager.addr_man.lock().unwrap();
+            am.select_best_ipv4(&active).or_else(|| am.select_best(&active))
         };
+
 
         let Some(addr) = addr else {
             debug!("no connectable peers in table");
@@ -235,7 +229,7 @@ async fn fill_connections(manager: &std::sync::Arc<PeerManager>, needed: usize) 
 
         // Mark this address as "attempted" so it isn't picked immediately again in the same loop
         // We do this by temporarily recording success or failure, but for now we just spawn it.
-        manager.table.lock().unwrap().record_success(addr); // Temporarily bump score to prevent duplicate selection
+        manager.addr_man.lock().unwrap().record_success(addr); // Temporarily bump score to prevent duplicate selection
 
         let mg = std::sync::Arc::clone(manager);
         tokio::spawn(async move {
@@ -246,23 +240,24 @@ async fn fill_connections(manager: &std::sync::Arc<PeerManager>, needed: usize) 
                     
                     // Task 4: send GetAddr right after successful connection!
                     use crate::p2p::messages::addr::GetAddr;
-                    if let Err(e) = peer.send(&GetAddr) {
+                    if let Err(e) = peer.send(Message::GetAddr(GetAddr)).await {
                         warn!("failed to send getaddr to {}: {}", addr, e);
                     }
 
                     // Task 4: Continously listen to messages.
                     loop {
                         match incoming_rx.recv().await {
-                            Some(crate::p2p::messages::Message::Addr(addr_msg)) => {
+                            Some(Message::Addr(addr_msg)) => {
                                 let new_addrs: Vec<std::net::SocketAddr> = addr_msg.addresses.into_iter().map(|n| {
                                     std::net::SocketAddr::new(
                                         std::net::IpAddr::V6(std::net::Ipv6Addr::from(n.ip)),
                                         n.port
                                     )
                                 }).collect();
-                                info!("Received {} addresses via gossip from {}", new_addrs.len(), addr);
-                                mg.table.lock().unwrap().add_many(new_addrs, addr);
+                                debug!("Received {} addresses via gossip from {}", new_addrs.len(), addr);
+                                mg.addr_man.lock().unwrap().add_many(new_addrs, addr);
                             }
+
                             // Ping is auto-handled by peer.rs reader task
                             // Process other messages later (Inv, Block, Headers, etc.)
                             Some(_msg) => {}
@@ -273,19 +268,18 @@ async fn fill_connections(manager: &std::sync::Arc<PeerManager>, needed: usize) 
                         }
                     }
 
-                    mg.remove_peer(&addr);
+                    // Exit loop on disconnect.
                 }
                 Err(P2pError::SelfConnection) => {
                     debug!("self-connection detected, skipping {}", addr);
                 }
                 Err(e) => {
                     debug!("connection to {} failed: {}", addr, e);
-                    // Undo the temporary bump since it failed
-                    mg.table.lock().unwrap().record_failure(addr);
-                    mg.table.lock().unwrap().record_failure(addr);
+                    mg.addr_man.lock().unwrap().record_failure(addr);
                 }
             }
         });
+
 
         spawned += 1;
         // Don't sleep massively, let them spawn concurrently
