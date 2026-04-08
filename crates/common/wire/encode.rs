@@ -142,6 +142,13 @@ impl<const N: usize> BitcoinEncode for [u8; N] {
     }
 }
 
+impl BitcoinEncode for Vec<u8> {
+    /// Vector of bytes is encoded as VarBytes (VarInt length + bytes).
+    fn encode(&self, enc: Encoder) -> Encoder {
+        enc.encode_field(&VarBytes(self))
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Wrapper types for special encodings
 // ---------------------------------------------------------------------------
@@ -179,6 +186,17 @@ impl BitcoinEncode for VarStr<'_> {
     fn encode(&self, enc: Encoder) -> Encoder {
         let b = self.0.as_bytes();
         enc.encode_field(&VarInt(b.len() as u64)).push_bytes(b)
+    }
+}
+
+/// Variable-length byte array: VarInt(len) + bytes.
+///
+/// Bitcoin Core: `SERIALIZE_METHODS` for `std::vector<unsigned char>`
+pub struct VarBytes<'a>(pub &'a [u8]);
+
+impl BitcoinEncode for VarBytes<'_> {
+    fn encode(&self, enc: Encoder) -> Encoder {
+        enc.encode_field(&VarInt(self.0.len() as u64)).push_bytes(self.0)
     }
 }
 

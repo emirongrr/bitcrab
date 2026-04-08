@@ -11,11 +11,30 @@
 
 use super::constants::MAX_SCRIPT_SIZE;
 
+use crate::wire::{
+    decode::{BitcoinDecode, Decoder},
+    encode::{BitcoinEncode, Encoder},
+    error::DecodeError,
+};
+
 /// An opaque Bitcoin script — a sequence of bytes.
 ///
 /// Does not interpret or validate the script contents.
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
-pub struct ScriptBuf(Vec<u8>);
+pub struct ScriptBuf(pub(crate) Vec<u8>);
+
+impl BitcoinEncode for ScriptBuf {
+    fn encode(&self, enc: Encoder) -> Encoder {
+        enc.encode_field(&crate::wire::encode::VarBytes(&self.0))
+    }
+}
+
+impl BitcoinDecode for ScriptBuf {
+    fn decode(dec: Decoder) -> Result<(Self, Decoder), DecodeError> {
+        let (bytes, dec) = dec.read_varbytes("ScriptBuf")?;
+        Ok((Self(bytes), dec))
+    }
+}
 
 impl ScriptBuf {
     /// Empty script.

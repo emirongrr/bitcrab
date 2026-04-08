@@ -3,189 +3,270 @@
 //! # Bitcoin Core
 //!
 //! `CTxIn`, `CTxOut`, `CTransaction` in `src/primitives/transaction.h`.
-//!
-//! Key differences from Bitcoin Core:
-//!
-//! | Field          | Bitcoin Core        | Bitcrab               |
-//! |----------------|---------------------|-----------------------|
-//! | output value   | `int64_t` (CAmount) | `Amount` (non-negative)|
-//! | scripts        | `CScript`           | `ScriptBuf`           |
-//! | mutability     | `CMutableTransaction` + `CTransaction` | one struct |
-//! | serialization  | `SERIALIZE_METHODS` macro | explicit functions (later) |
 
 use super::{amount::Amount, hash::Txid, script::ScriptBuf};
+use crate::wire::{
+    decode::{BitcoinDecode, Decoder},
+    encode::{BitcoinEncode, Encoder, VarList},
+    error::DecodeError,
+};
 
 /// Reference to a specific unspent output (UTXO).
-///
-/// Bitcoin Core: `COutPoint` in `src/primitives/transaction.h`
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct OutPoint {
-    /// The transaction that created this output.
     pub txid: Txid,
-    /// Index within that transaction's output list.
     pub vout: u32,
 }
 
 impl OutPoint {
-    /// The sentinel coinbase outpoint (txid=0, vout=0xFFFFFFFF).
-    ///
-    /// Every coinbase transaction uses this as its single input's prevout.
-    ///
-    /// Bitcoin Core: `COutPoint()` default constructor.
     pub const COINBASE: Self = Self {
         txid: Txid::ZERO,
         vout: u32::MAX,
     };
 
-    /// True if this is the coinbase sentinel.
     pub fn is_coinbase(&self) -> bool {
         self.txid == Txid::ZERO && self.vout == u32::MAX
     }
 }
 
+impl BitcoinEncode for OutPoint {
+    fn encode(&self, enc: Encoder) -> Encoder {
+        enc.encode_field(self.txid.as_bytes())
+           .encode_field(&self.vout)
+    }
+}
+
+impl BitcoinDecode for OutPoint {
+    fn decode(dec: Decoder) -> Result<(Self, Decoder), DecodeError> {
+        let (txid_bytes, dec) = dec.decode_field::<[u8; 32]>("OutPoint::txid")?;
+        let (vout, dec) = dec.decode_field::<u32>("OutPoint::vout")?;
+        Ok((Self {
+            txid: Txid::from_bytes(txid_bytes),
+            vout,
+        }, dec))
+    }
+}
+
 /// A transaction input.
-///
-/// Bitcoin Core: `CTxIn` in `src/primitives/transaction.h`
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TxIn {
-    /// The output being spent.
-    ///
-    /// Bitcoin Core: `COutPoint prevout`
     pub previous_output: OutPoint,
-
-    /// Unlocking script (empty for native segwit inputs).
-    ///
-    /// For P2PKH: contains <sig> <pubkey>.
-    /// For P2SH: contains <data...> <redeemScript>.
-    /// For P2WPKH / P2WSH / P2TR: must be empty — authorization is in `witness`.
-    ///
-    /// Bitcoin Core: `CScript scriptSig`
     pub script_sig: ScriptBuf,
-
-    /// Sequence number.
-    ///
-    /// Dual-purpose (a design flaw):
-    /// 1. Relative timelock (BIP-68) when version >= 2 and bit 31 clear.
-    /// 2. Opt-in RBF signal (BIP-125) when < 0xFFFFFFFE.
-    ///
-    /// Bitcoin Core: `uint32_t nSequence`
     pub sequence: u32,
-
-    /// Segregated witness stack.
-    ///
-    /// Empty for legacy (pre-SegWit) inputs.
-    /// Excluded from txid computation — included in wtxid.
-    ///
-    /// Bitcoin Core: `CScriptWitness scriptWitness`
+    /// SegWit witness stack (Vec of push-data elements).
     pub witness: Vec<Vec<u8>>,
 }
 
 impl TxIn {
-    /// Sequence value meaning "final" — no relative locktime, no RBF.
-    ///
-    /// Bitcoin Core: `CTxIn::SEQUENCE_FINAL = 0xffffffff`
     pub const SEQUENCE_FINAL: u32 = 0xFFFF_FFFF;
-
-    /// Opt-in RBF threshold — sequence values below this signal replaceability.
-    ///
-    /// Bitcoin Core: signalled by `nSequence < MAX_BIP125_RBF_SEQUENCE`
-    /// in `src/policy/rbf.h`
-    pub const SEQUENCE_RBF_THRESHOLD: u32 = 0xFFFF_FFFE;
-
-    /// True if this input signals opt-in Replace-By-Fee (BIP-125).
-    pub fn signals_rbf(&self) -> bool {
-        self.sequence < Self::SEQUENCE_RBF_THRESHOLD
-    }
-
-    /// True if relative locktime (BIP-68) is enabled for this input.
-    ///
-    /// BIP-68 is enabled when:
-    /// - Transaction version >= 2
-    /// - Bit 31 of sequence is clear
-    pub fn has_relative_locktime(&self) -> bool {
-        self.sequence & (1 << 31) == 0
+    pub fn is_final(&self) -> bool {
+        self.sequence == Self::SEQUENCE_FINAL
     }
 }
 
-/// A transaction output — creates a new UTXO.
-///
-/// Bitcoin Core: `CTxOut` in `src/primitives/transaction.h`
+impl BitcoinEncode for TxIn {
+    fn encode(&self, enc: Encoder) -> Encoder {
+        enc.encode_field(&self.previous_output)
+           .encode_field(&self.script_sig)
+           .encode_field(&self.sequence)
+    }
+}
+
+impl BitcoinDecode for TxIn {
+    fn decode(dec: Decoder) -> Result<(Self, Decoder), DecodeError> {
+        let (prev, dec) = dec.decode_field::<OutPoint>("TxIn::previous_output")?;
+        let (sig, dec) = dec.decode_field::<ScriptBuf>("TxIn::script_sig")?;
+        let (seq, dec) = dec.decode_field::<u32>("TxIn::sequence")?;
+        Ok((Self {
+            previous_output: prev,
+            script_sig: sig,
+            sequence: seq,
+            witness: Vec::new(),
+        }, dec))
+    }
+}
+
+/// A transaction output.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TxOut {
-    /// Value in satoshis.
-    ///
-    /// Bitcoin Core: `CAmount nValue` (int64_t — can be negative until checked).
-    /// Bitcrab: `Amount` — negative is structurally impossible.
     pub value: Amount,
-
-    /// Locking script — defines conditions to spend this output.
-    ///
-    /// Bitcoin Core: `CScript scriptPubKey`
     pub script_pubkey: ScriptBuf,
 }
 
-/// A complete Bitcoin transaction.
-///
-/// Bitcoin Core: `CTransaction` in `src/primitives/transaction.h`
-///
-/// Bitcoin Core has two types: `CTransaction` (immutable) and
-/// `CMutableTransaction` (mutable). We use one struct.
-/// Rust's borrow checker provides immutability when needed.
+impl BitcoinEncode for TxOut {
+    fn encode(&self, enc: Encoder) -> Encoder {
+        enc.encode_field(&self.value)
+           .encode_field(&self.script_pubkey)
+    }
+}
+
+impl BitcoinDecode for TxOut {
+    fn decode(dec: Decoder) -> Result<(Self, Decoder), DecodeError> {
+        let (val, dec) = dec.decode_field::<Amount>("TxOut::value")?;
+        let (script, dec) = dec.decode_field::<ScriptBuf>("TxOut::script_pubkey")?;
+        Ok((Self {
+            value: val,
+            script_pubkey: script,
+        }, dec))
+    }
+}
+
+/// A Bitcoin transaction.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Transaction {
-    /// 1 = original. 2 = BIP-68 relative timelocks.
-    ///
-    /// Bitcoin Core: `int32_t nVersion`
-    pub version: i32,
-
-    /// Inputs — each spends a previous UTXO.
-    ///
-    /// Bitcoin Core: `std::vector<CTxIn> vin`
-    pub input: Vec<TxIn>,
-
+    pub version: u32,
+    /// Inputs — each spends a UTXO.
+    pub inputs: Vec<TxIn>,
     /// Outputs — each creates a new UTXO.
-    ///
-    /// Bitcoin Core: `std::vector<CTxOut> vout`
-    pub output: Vec<TxOut>,
-
+    pub outputs: Vec<TxOut>,
     /// Locktime — earliest block/time this tx can be mined.
-    ///
-    /// 0: always final.
-    /// 1–499_999_999: block height.
-    /// 500_000_000+: Unix timestamp.
-    ///
-    /// Bitcoin Core: `uint32_t nLockTime`
     pub lock_time: u32,
 }
 
 impl Transaction {
-    /// True if this is a coinbase transaction.
-    ///
-    /// Bitcoin Core: `CTransaction::IsCoinBase()` in `src/primitives/transaction.h`
     pub fn is_coinbase(&self) -> bool {
-        self.input.len() == 1 && self.input[0].previous_output.is_coinbase()
+        self.inputs.len() == 1 && self.inputs[0].previous_output.is_coinbase()
     }
 
-    /// True if any input has witness data.
-    ///
-    /// Bitcoin Core: `CTransaction::HasWitness()` in `src/primitives/transaction.h`
     pub fn is_segwit(&self) -> bool {
-        self.input.iter().any(|i| !i.witness.is_empty())
+        self.inputs.iter().any(|i| !i.witness.is_empty())
     }
 
-    /// Sum of all output values.
-    ///
-    /// Returns `None` if sum exceeds `MAX_MONEY`.
-    ///
-    /// Bitcoin Core: accumulates `nValueOut` in `CheckTransaction()`
-    /// in `src/consensus/tx_check.cpp`
     pub fn output_value(&self) -> Option<Amount> {
-        self.output
+        self.outputs
             .iter()
             .try_fold(Amount::ZERO, |acc, out| acc.checked_add(out.value))
     }
+
+    /// Calculate the transaction hash (TXID).
+    pub fn txid(&self) -> super::hash::Txid {
+        let mut enc = Encoder::new();
+        enc = enc.encode_field(&self.version)
+                 .encode_field(&VarList(&self.inputs))
+                 .encode_field(&VarList(&self.outputs))
+                 .encode_field(&self.lock_time);
+        super::hash::Txid::hash(&enc.finish())
+    }
+
+    /// Calculate the signature hash for a specific input.
+    ///
+    /// Bitcoin Core: `SignatureHash()` in `src/script/interpreter.cpp`.
+    /// Currently implements standard SIGHASH_ALL for legacy transactions.
+    pub fn signature_hash(
+        &self,
+        input_index: usize,
+        script_pubkey: &super::script::ScriptBuf,
+        sighash_type: u32,
+    ) -> [u8; 32] {
+        if input_index >= self.inputs.len() {
+            // Bitcoin Core returns 1.0.0...0 hash for out-of-bounds input index
+            let mut oob = [0u8; 32];
+            oob[0] = 1;
+            return oob;
+        }
+
+        // 1. Create a simplified copy of the transaction
+        let mut tx_copy = self.clone();
+
+        // 2. Clear all input scripts
+        for input in &mut tx_copy.inputs {
+            input.script_sig = super::script::ScriptBuf::new();
+        }
+
+        // 3. Set the scriptSig of the input being signed to the scriptPubKey
+        // Note: In real Bitcoin, this also involves removing OP_CODESEPARATORs.
+        tx_copy.inputs[input_index].script_sig = script_pubkey.clone();
+
+        // 4. Handle SIGHASH_NONE / SIGHASH_SINGLE (TODO)
+        // For SIGHASH_ALL (1), we do nothing else.
+
+        // 5. Serialize and append sighash type
+        let mut enc = Encoder::new();
+        enc = enc.encode_field(&tx_copy.version)
+                 .encode_field(&VarList(&tx_copy.inputs))
+                 .encode_field(&VarList(&tx_copy.outputs))
+                 .encode_field(&tx_copy.lock_time)
+                 .encode_field(&sighash_type);
+
+        // 6. Double-SHA256
+        super::hash::hash256(&enc.finish())
+    }
+
+    /// Calculate the witness transaction hash (WTXID).
+    pub fn wtxid(&self) -> super::hash::Txid {
+        if !self.is_segwit() {
+            return self.txid();
+        }
+        super::hash::Txid::hash(&self.encode(Encoder::new()).finish())
+    }
 }
 
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
+impl BitcoinEncode for Transaction {
+    fn encode(&self, enc: Encoder) -> Encoder {
+        if self.is_segwit() {
+            let mut enc = enc.encode_field(&self.version)
+                             .encode_field(&0u8) // Marker
+                             .encode_field(&1u8); // Flag
+            
+            enc = enc.encode_field(&VarList(&self.inputs))
+                     .encode_field(&VarList(&self.outputs));
+            
+            for input in &self.inputs {
+                enc = enc.encode_field(&VarList(&input.witness));
+            }
+            
+            enc.encode_field(&self.lock_time)
+        } else {
+            enc.encode_field(&self.version)
+               .encode_field(&VarList(&self.inputs))
+               .encode_field(&VarList(&self.outputs))
+               .encode_field(&self.lock_time)
+        }
+    }
+}
+
+impl BitcoinDecode for Transaction {
+    fn decode(dec: Decoder) -> Result<(Self, Decoder), DecodeError> {
+        let (version, dec) = dec.decode_field::<u32>("Transaction::version")?;
+        
+        let (marker, _peek_dec) = dec.decode_field::<u8>("Transaction::marker")?;
+        
+        if marker == 0 {
+            let (_, dec) = dec.decode_field::<u8>("Transaction::marker")?;
+            let (flag, dec) = dec.decode_field::<u8>("Transaction::flag")?;
+            if flag != 1 {
+                return Err(DecodeError::Custom("invalid SegWit flag".into()));
+            }
+            
+            let (mut inputs, dec) = dec.read_var_list::<TxIn>("Transaction::inputs")?;
+            let (outputs, dec) = dec.read_var_list::<TxOut>("Transaction::outputs")?;
+            
+            let mut dec = dec;
+            for input in &mut inputs {
+                let (witness, next_dec) = dec.read_var_list::<Vec<u8>>("Transaction::witness")?;
+                input.witness = witness;
+                dec = next_dec;
+            }
+            
+            let (lock_time, dec) = dec.decode_field::<u32>("Transaction::lock_time")?;
+            
+            Ok((Self {
+                version,
+                inputs,
+                outputs,
+                lock_time,
+            }, dec))
+        } else {
+            let (inputs, dec) = dec.read_var_list::<TxIn>("Transaction::inputs")?;
+            let (outputs, dec) = dec.read_var_list::<TxOut>("Transaction::outputs")?;
+            let (lock_time, dec) = dec.decode_field::<u32>("Transaction::lock_time")?;
+            
+            Ok((Self {
+                version,
+                inputs,
+                outputs,
+                lock_time,
+            }, dec))
+        }
+    }
+}

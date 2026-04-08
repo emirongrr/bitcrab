@@ -64,6 +64,7 @@ impl<const N: usize> BitcoinDecode for [u8; N] {
 
 /// Cursor-based decoder for Bitcoin wire format payloads.
 ///
+#[derive(Clone, Copy)]
 #[must_use = "Decoder must be consumed with finish() or finish_unchecked()"]
 pub struct Decoder<'a> {
     data: &'a [u8],
@@ -201,6 +202,31 @@ impl<'a> Decoder<'a> {
         Ok((v, self))
     }
 
+    /// Read a VarInt-prefixed byte array.
+    pub fn read_varbytes(self, label: &'static str) -> Result<(Vec<u8>, Self), DecodeError> {
+        let (len, dec) = self.read_varint(label)?;
+        dec.read_bytes(len as usize, label)
+    }
+
+    /// Read a VarInt-prefixed list of items.
+    pub fn read_var_list<T: BitcoinDecode>(self, label: &'static str) -> Result<(Vec<T>, Self), DecodeError> {
+        let (count, mut dec) = self.read_varint(label)?;
+        let mut items = Vec::with_capacity(count as usize);
+        for _ in 0..count {
+            let (item, next_dec) = T::decode(dec)?;
+            items.push(item);
+            dec = next_dec;
+        }
+        Ok((items, dec))
+    }
+
+    pub fn read_bytes(mut self, n: usize, field: &'static str) -> Result<(Vec<u8>, Self), DecodeError> {
+        self.require(n, field)?;
+        let v = self.data[self.pos..self.pos + n].to_vec();
+        self.pos += n;
+        Ok((v, self))
+    }
+
     /// Read varint(len) + len bytes as UTF-8 string.
     pub fn read_var_str(mut self, field: &'static str) -> Result<(String, Self), DecodeError> {
         let (len, consumed) = read_varint_raw(&self.data[self.pos..])
@@ -275,6 +301,13 @@ impl BitcoinDecode for i64 {
 impl BitcoinDecode for bool {
     fn decode(dec: Decoder) -> Result<(Self, Decoder), DecodeError> {
         dec.read_bool("bool")
+    }
+}
+
+impl BitcoinDecode for Vec<u8> {
+    /// Vector of bytes is decoded as VarBytes (VarInt length + bytes).
+    fn decode(dec: Decoder) -> Result<(Self, Decoder), DecodeError> {
+        dec.read_varbytes("Vec<u8>")
     }
 }
 

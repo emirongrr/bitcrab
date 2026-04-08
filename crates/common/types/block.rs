@@ -10,10 +10,11 @@
 use super::{
     flat_file_pos::FlatFilePos,
     hash::{hash256, BlockHash, Hash256},
+    transaction::Transaction,
 };
 use crate::wire::{
     decode::{BitcoinDecode, Decoder},
-    encode::{BitcoinEncode, Encoder},
+    encode::{BitcoinEncode, Encoder, VarList},
     error::DecodeError,
 };
 
@@ -180,6 +181,71 @@ impl BitcoinDecode for BlockHeader {
     fn decode(dec: Decoder) -> Result<(Self, Decoder), DecodeError> {
         let (bytes, dec) = dec.decode_field::<[u8; 80]>("BlockHeader")?;
         Ok((Self::deserialize(&bytes), dec))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Block
+// ---------------------------------------------------------------------------
+
+/// A full Bitcoin block (header + transactions).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Block {
+    pub header: BlockHeader,
+    pub transactions: Vec<Transaction>,
+}
+
+impl Block {
+    pub fn new(header: BlockHeader, transactions: Vec<Transaction>) -> Self {
+        Self { header, transactions }
+    }
+
+    /// Calculate the Merkle Root of all transactions in this block.
+    ///
+    /// Bitcoin Core: `ComputeMerkleRoot()` in `src/consensus/merkle.cpp`.
+    pub fn compute_merkle_root(&self) -> Hash256 {
+        if self.transactions.is_empty() {
+             return Hash256::ZERO;
+        }
+
+        // 1. Initial level: TXIDs
+        let mut hashes: Vec<Hash256> = self.transactions.iter()
+            .map(|tx| Hash256::from_bytes(*tx.txid().as_bytes()))
+            .collect();
+
+        // 2. Iteratively compute levels until one root hash remains
+        while hashes.len() > 1 {
+            // If odd number of hashes, duplicate the last one (Bitcoin rule)
+            if hashes.len() % 2 != 0 {
+                hashes.push(hashes[hashes.len() - 1]);
+            }
+
+            let mut next_level = Vec::with_capacity(hashes.len() / 2);
+            for chunk in hashes.chunks(2) {
+                let mut combined = [0u8; 64];
+                combined[..32].copy_from_slice(chunk[0].as_bytes());
+                combined[32..].copy_from_slice(chunk[1].as_bytes());
+                next_level.push(Hash256::hash(&combined));
+            }
+            hashes = next_level;
+        }
+
+        hashes[0]
+    }
+}
+
+impl BitcoinEncode for Block {
+    fn encode(&self, enc: Encoder) -> Encoder {
+        enc.encode_field(&self.header)
+           .encode_field(&VarList(&self.transactions))
+    }
+}
+
+impl BitcoinDecode for Block {
+    fn decode(dec: Decoder) -> Result<(Self, Decoder), DecodeError> {
+        let (header, dec) = dec.decode_field::<BlockHeader>("Block::header")?;
+        let (transactions, dec) = dec.read_var_list::<Transaction>("Block::transactions")?;
+        Ok((Self { header, transactions }, dec))
     }
 }
 

@@ -13,12 +13,30 @@
 //! All arithmetic is checked — overflow returns an error.
 
 use super::constants::{COIN, MAX_MONEY};
+use crate::wire::{
+    decode::{BitcoinDecode, Decoder},
+    encode::{BitcoinEncode, Encoder},
+    error::DecodeError,
+};
 
 /// A non-negative Bitcoin amount in satoshis.
 ///
 /// Always in `[0, MAX_MONEY]`.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Debug)]
 pub struct Amount(u64);
+
+impl BitcoinEncode for Amount {
+    fn encode(&self, enc: Encoder) -> Encoder {
+        enc.encode_field(&self.0)
+    }
+}
+
+impl BitcoinDecode for Amount {
+    fn decode(dec: Decoder) -> Result<(Self, Decoder), DecodeError> {
+        let (val, dec) = dec.decode_field::<u64>("Amount")?;
+        Ok((Self(val), dec))
+    }
+}
 
 impl Amount {
     /// Zero satoshis.
@@ -69,6 +87,11 @@ impl Amount {
             .checked_mul(factor)
             .filter(|&v| v <= MAX_MONEY)
             .map(Self)
+    }
+
+    /// Check if the amount is within the valid Bitcoin supply range [0, MAX_MONEY].
+    pub fn is_valid(self) -> bool {
+        self.0 <= MAX_MONEY
     }
 }
 
