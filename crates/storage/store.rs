@@ -1,19 +1,20 @@
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{mpsc, oneshot};
 
 use bitcrab_common::types::block::{BlockHeader, BlockHeight, BlockIndex};
 use bitcrab_common::FlatFilePos;
 use bitcrab_common::types::hash::BlockHash;
-use bitcrab_common::wire::encode::Encoder;
 use bitcrab_common::wire::decode::{BitcoinDecode, Decoder};
+
 
 use crate::api::{StorageBackend, tables};
 use crate::backend::in_memory::InMemoryBackend;
 #[cfg(feature = "rocksdb")]
 use crate::backend::rocksdb::RocksDBBackend;
-use crate::block_file::{BlockFileManager, Magic};
+use crate::block_file::{BlockFileManager, BlockFileReader, Magic};
 use crate::error::StoreError;
+use crate::worker::{StorageWorker, WriteMessage};
 
 /// Storage engine selection.
 pub enum EngineType {
@@ -25,15 +26,14 @@ pub enum EngineType {
 }
 
 /// The high-level storage orchestrator for the bitcrab node.
-///
-/// Mirrors Bitcoin Core's architecture:
-/// - Raw blocks are stored in append-only `blk*.dat` files.
-/// - Metadata (block index, UTXO set) is stored in a key-value backend (RocksDB).
-///
+/// 
+/// - Reads: Direct and concurrent via Arc<dyn StorageBackend>.
+/// - Writes: Sequential and asynchronous via StorageWorker actor.
 #[derive(Clone)]
 pub struct Store {
     backend: Arc<dyn StorageBackend>,
-    block_file_manager: Arc<RwLock<BlockFileManager>>,
+    block_reader: BlockFileReader,
+    worker_tx: mpsc::Sender<WriteMessage>,
 }
 
 impl Store {
@@ -58,9 +58,22 @@ impl Store {
                 .unwrap_or(0)
         };
 
-        let block_file_manager = Arc::new(RwLock::new(BlockFileManager::new(path, magic, last_file)?));
+        let block_file_manager = BlockFileManager::new(path, magic, last_file)?;
+        let block_reader = block_file_manager.reader();
 
-        Ok(Self { backend, block_file_manager })
+        // Start the sequential write worker
+        let (tx, rx) = mpsc::channel(1024);
+        let worker = StorageWorker::new(Arc::clone(&backend), block_file_manager, rx);
+        
+        tokio::spawn(async move {
+            worker.run().await;
+        });
+
+        Ok(Self { 
+            backend, 
+            block_reader,
+            worker_tx: tx 
+        })
     }
 
     /// Convenience for creating a fresh in-memory store for tests.
@@ -71,39 +84,25 @@ impl Store {
     // ── Headers ───────────────────────────────────────────────────────────────
 
     /// Store a block header and update the chain tip if `is_best` is true.
-    pub fn store_header(
+    pub async fn store_header(
         &self,
-        header: &BlockHeader,
+        header: BlockHeader, // Move header in
         height: BlockHeight,
         is_best: bool,
     ) -> Result<(), StoreError> {
-        let hash = header.block_hash();
-        let index = BlockIndex {
-            header:   header.clone(),
+        let (tx, rx) = oneshot::channel();
+        self.worker_tx.send(WriteMessage::StoreHeader {
+            header,
             height,
-            file_pos: None,
-            undo_pos: None,
-        };
+            is_best,
+            reply_to: tx,
+        }).await.map_err(|_| StoreError::Custom("storage worker dead".into()))?;
 
-        let mut write = self.backend.begin_write()?;
-        
-        // 1. Store index record: 'b' + hash -> BlockIndex
-        let mut key = Vec::with_capacity(33);
-        key.push(tables::PREFIX_BLOCK);
-        key.extend_from_slice(hash.as_bytes());
-        
-        let value = Encoder::new().encode_field(&index).finish();
-        write.put(tables::BLOCK_INDEX, &key, &value)?;
-
-        // 2. Update best block if needed: 'B' -> hash
-        if is_best {
-            write.put(tables::UTXOS, &[tables::KEY_BEST_BLOCK], hash.as_bytes())?;
-        }
-
-        write.commit()
+        rx.await.map_err(|_| StoreError::Custom("storage worker dropped response".into()))?
     }
 
     /// Retrieve a block index (header + metadata) by hash.
+    /// Performs a direct thread-safe read from the backend.
     pub fn get_block_index(&self, hash: &BlockHash) -> Result<Option<BlockIndex>, StoreError> {
         let read = self.backend.begin_read()?;
         
@@ -137,42 +136,21 @@ impl Store {
     // ── Blocks ────────────────────────────────────────────────────────────────
 
     /// Append a full block to disk and update its index record with the file pointer.
-    pub async fn store_block(&self, header: &BlockHeader, height: BlockHeight, raw_block: &[u8]) -> Result<FlatFilePos, StoreError> {
-        let hash = header.block_hash();
-        
-        // 1. Write to blk*.dat
-        let mut mgr = self.block_file_manager.write().await;
-        let pos = mgr.write_block(raw_block)?;
-        let last_file = mgr.current_file();
-        drop(mgr);
-
-        // 2. Update index with position
-        let index = BlockIndex {
-            header:   header.clone(),
+    pub async fn store_block(&self, header: BlockHeader, height: BlockHeight, raw_block: Vec<u8>) -> Result<FlatFilePos, StoreError> {
+        let (tx, rx) = oneshot::channel();
+        self.worker_tx.send(WriteMessage::StoreBlock {
+            header,
             height,
-            file_pos: Some(pos),
-            undo_pos: None,
-        };
+            raw_block,
+            reply_to: tx,
+        }).await.map_err(|_| StoreError::Custom("storage worker dead".into()))?;
 
-        let mut write = self.backend.begin_write()?;
-        
-        let mut key = Vec::with_capacity(33);
-        key.push(tables::PREFIX_BLOCK);
-        key.extend_from_slice(hash.as_bytes());
-        
-        let value = Encoder::new().encode_field(&index).finish();
-        write.put(tables::BLOCK_INDEX, &key, &value)?;
-
-        // 3. Update last file in metadata
-        write.put(tables::CHAIN_META, &[tables::KEY_LAST_FILE], &last_file.to_le_bytes())?;
-
-        write.commit()?;
-        
-        Ok(pos)
+        rx.await.map_err(|_| StoreError::Custom("storage worker dropped response".into()))?
     }
 
     /// Retrieve raw block bytes from disk by hash.
-    pub async fn get_block(&self, hash: &BlockHash) -> Result<Option<Vec<u8>>, StoreError> {
+    /// Performs direct concurrent disk read without worker mediation.
+    pub fn get_block(&self, hash: &BlockHash) -> Result<Option<Vec<u8>>, StoreError> {
         let Some(index) = self.get_block_index(hash)? else {
             return Ok(None);
         };
@@ -181,10 +159,18 @@ impl Store {
             return Ok(None);
         };
 
-        let mgr = self.block_file_manager.read().await;
-        let data = mgr.read_block(pos)?;
-        
+        let data = self.block_reader.read_block(pos)?;
         Ok(Some(data))
+    }
+
+    /// Flush buffers to disk.
+    pub async fn flush(&self) -> Result<(), StoreError> {
+        let (tx, rx) = oneshot::channel();
+        self.worker_tx.send(WriteMessage::Flush {
+            reply_to: tx,
+        }).await.map_err(|_| StoreError::Custom("storage worker dead".into()))?;
+
+        rx.await.map_err(|_| StoreError::Custom("storage worker dropped response".into()))?
     }
 }
 

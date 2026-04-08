@@ -2,7 +2,9 @@ pub mod api;
 pub mod backend;
 pub mod error;
 pub mod block_file;
+pub mod worker;
 pub mod store;
+
 
 pub use api::{StorageBackend, StorageReadView, StorageWriteBatch, StorageLockedView};
 pub use backend::in_memory::InMemoryBackend;

@@ -149,12 +149,13 @@ impl BitcoinDecode for BlockFileInfo {
 /// path construction, pre-allocation, finalization.
 ///
 /// Equivalent to Bitcoin Core's `FlatFileSeq`.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FlatFileSeq {
     dir:        PathBuf,
     prefix:     &'static str,
     chunk_size: u64,
 }
+
 
 impl FlatFileSeq {
     pub fn new(dir: impl Into<PathBuf>, prefix: &'static str, chunk_size: u64) -> Self {
@@ -235,6 +236,25 @@ pub struct BlockFileManager {
     pub current_size: u64,
 }
 
+/// A thread-safe, cloneable handle for reading raw block/undo records.
+#[derive(Debug, Clone)]
+pub struct BlockFileReader {
+    blocks: FlatFileSeq,
+    undo:   FlatFileSeq,
+    magic:  Magic,
+}
+
+impl BlockFileReader {
+    pub fn read_block(&self, pos: FlatFilePos) -> Result<Vec<u8>, StoreError> {
+        read_record(&self.blocks, pos, self.magic)
+    }
+
+    pub fn read_undo(&self, pos: FlatFilePos) -> Result<Vec<u8>, StoreError> {
+        read_record(&self.undo, pos, self.magic)
+    }
+}
+
+
 impl BlockFileManager {
     /// Open (or resume) the flat-file sequence.
     ///
@@ -258,8 +278,19 @@ impl BlockFileManager {
             }
         };
 
+
         Ok(Self { blocks, undo, magic, current_file: last_file, current_size })
     }
+
+    /// Obtain a thread-safe reader handle.
+    pub fn reader(&self) -> BlockFileReader {
+        BlockFileReader {
+            blocks: self.blocks.clone(),
+            undo:   self.undo.clone(),
+            magic:  self.magic,
+        }
+    }
+
 
     // ── Write ─────────────────────────────────────────────────────────────────
 
@@ -320,13 +351,14 @@ impl BlockFileManager {
 
     /// Read a block from its `FlatFilePos`.
     pub fn read_block(&self, pos: FlatFilePos) -> Result<Vec<u8>, StoreError> {
-        read_record(&self.blocks, pos)
+        read_record(&self.blocks, pos, self.magic)
     }
 
     /// Read undo data from its `FlatFilePos`.
     pub fn read_undo(&self, pos: FlatFilePos) -> Result<Vec<u8>, StoreError> {
-        read_record(&self.undo, pos)
+        read_record(&self.undo, pos, self.magic)
     }
+
 
     // ── State ─────────────────────────────────────────────────────────────────
 
@@ -371,7 +403,8 @@ impl BlockFileManager {
 ///
 /// `pos.offset` points to the data start. We seek back 4 bytes to read
 /// the size field, then forward to read that many bytes of data.
-fn read_record(seq: &FlatFileSeq, pos: FlatFilePos) -> Result<Vec<u8>, StoreError> {
+fn read_record(seq: &FlatFileSeq, pos: FlatFilePos, _magic: Magic) -> Result<Vec<u8>, StoreError> {
+
     let mut file = seq.open_for_read(pos.file)?;
 
     let size_at = (pos.offset as u64).checked_sub(4).ok_or_else(|| {
