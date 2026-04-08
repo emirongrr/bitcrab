@@ -72,7 +72,37 @@ impl Message {
             other                => Ok(Self::Ignored(other.clone())),
         }
     }
+
+    pub fn encode(&self) -> Vec<u8> {
+        match self {
+            Self::Version(v)    => v.encode(),
+            Self::Verack(v)     => v.encode(),
+            Self::Ping(v)       => v.encode(),
+            Self::Pong(v)       => v.encode(),
+            Self::GetHeaders(v) => v.encode(),
+            Self::Headers(v)    => v.encode(),
+            Self::Addr(v)       => v.encode(),
+            Self::GetAddr(v)    => v.encode(),
+            _ => vec![],
+        }
+    }
+
+    pub fn command(&self) -> Command {
+        match self {
+            Self::Version(_)    => Command::Version,
+            Self::Verack(_)     => Command::Verack,
+            Self::Ping(_)       => Command::Ping,
+            Self::Pong(_)       => Command::Pong,
+            Self::GetHeaders(_) => Command::GetHeaders,
+            Self::Headers(_)    => Command::Headers,
+            Self::Addr(_)       => Command::Addr,
+            Self::GetAddr(_)    => Command::GetAddr,
+            Self::Ignored(c)    => c.clone(),
+            Self::Unknown(s)    => Command::Unknown(s.clone()),
+        }
+    }
 }
+
 
 impl std::fmt::Display for Message {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

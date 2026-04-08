@@ -11,6 +11,8 @@ use bitcrab_common::wire::{
 use crate::p2p::message::Command;
 use super::BitcoinMessage;
 
+use std::net::{IpAddr, Ipv6Addr, SocketAddr};
+
 /// Network address information shared in an `addr` message.
 ///
 /// Bitcoin Core: CAddress
@@ -23,7 +25,15 @@ pub struct NetAddr {
 }
 
 impl NetAddr {
+    pub fn to_socket_addr(&self) -> SocketAddr {
+        let ip = IpAddr::V6(Ipv6Addr::from(self.ip));
+        // Bitcoin handles mapped addresses. If it's a mapped IPv4, 
+        // to_canonical() can be used if needed, but SocketAddr handles V6 well.
+        SocketAddr::new(ip, self.port)
+    }
+
     pub fn encode(&self, encoder: Encoder) -> Encoder {
+
         encoder.encode_field(&self.time)
                .encode_field(&self.services)
                .encode_field(&self.ip)

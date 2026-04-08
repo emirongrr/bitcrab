@@ -1,5 +1,4 @@
 //! Core Actor traits and types for bitcrab-net.
-//! Inspired by ethrex and Bitcoin Core's CNode but simplified for Rust.
 
 use tokio::sync::{mpsc, oneshot};
 use thiserror::Error;
@@ -15,7 +14,6 @@ pub enum ActorError {
 }
 
 /// A handle to an actor that can send asynchronous requests.
-/// Mimics ActorRef<T> from ethrex.
 pub struct ActorRef<M> {
     tx: mpsc::Sender<M>,
 }
