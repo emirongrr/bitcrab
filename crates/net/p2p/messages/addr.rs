@@ -27,9 +27,20 @@ pub struct NetAddr {
 impl NetAddr {
     pub fn to_socket_addr(&self) -> SocketAddr {
         let ip = IpAddr::V6(Ipv6Addr::from(self.ip));
-        // Bitcoin handles mapped addresses. If it's a mapped IPv4,
-        // to_canonical() can be used if needed, but SocketAddr handles V6 well.
         SocketAddr::new(ip, self.port)
+    }
+
+    pub fn from_socket_addr(addr: SocketAddr) -> Self {
+        let (ip, port) = match addr {
+            SocketAddr::V4(a) => (a.ip().to_ipv6_mapped().octets(), a.port()),
+            SocketAddr::V6(a) => (a.ip().octets(), a.port()),
+        };
+        Self {
+            time: 0,
+            services: 0,
+            ip,
+            port,
+        }
     }
 
     pub fn encode(&self, encoder: Encoder) -> Encoder {

@@ -3,12 +3,12 @@
 
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::oneshot;
 use tokio::time::{Duration, Instant};
 use tracing::{debug, info, warn};
 
 use super::{
-    actor::{ActorError, ActorRef},
+    actor::{Actor, ActorError, ActorRef, Context},
     addr_man::AddrMan,
     messages::addr::NetAddr,
     peer::PeerHandle,
@@ -34,6 +34,8 @@ pub enum PeerTableMessage {
     GetAddresses(oneshot::Sender<Vec<NetAddr>>),
     /// Add multiple addresses to the address manager.
     AddAddresses(Vec<NetAddr>, SocketAddr),
+    /// Select the best address to connect to.
+    GetBestAddress(oneshot::Sender<Option<SocketAddr>>),
     /// Get all active peer handles.
     GetPeers(oneshot::Sender<Vec<PeerHandle>>),
 }
@@ -44,12 +46,29 @@ struct PeerTableActor {
     addr_man: AddrMan,
     ban_list: HashMap<IpAddr, Instant>,
     scores: HashMap<SocketAddr, i32>,
-    receiver: mpsc::Receiver<PeerTableMessage>,
 }
 
 impl PeerTableActor {
-    async fn run(mut self) {
-        while let Some(msg) = self.receiver.recv().await {
+    async fn ban_peer(&mut self, addr: SocketAddr) {
+        warn!("[table] banning IP {} (Socket: {})", addr.ip(), addr);
+        self.ban_list
+            .insert(addr.ip(), Instant::now() + Duration::from_secs(86400));
+        if let Some(peer) = self.peers.remove(&addr) {
+            let _ = peer.disconnect().await;
+        }
+        self.addr_man.record_failure(addr);
+    }
+}
+
+impl Actor for PeerTableActor {
+    type Message = PeerTableMessage;
+
+    fn handle(
+        &mut self,
+        msg: Self::Message,
+        _ctx: &mut Context<Self>,
+    ) -> impl std::future::Future<Output = Result<(), ActorError>> + Send {
+        async move {
             match msg {
                 PeerTableMessage::AddPeer(handle) => {
                     info!("[table] added peer {}", handle.addr);
@@ -102,22 +121,18 @@ impl PeerTableActor {
                         self.addr_man.add(addr.to_socket_addr(), source);
                     }
                 }
+                PeerTableMessage::GetBestAddress(tx) => {
+                    let best = self.addr_man.select_best_ipv4(&[])
+                        .or_else(|| self.addr_man.select_best(&[]));
+                    let _ = tx.send(best);
+                }
                 PeerTableMessage::GetPeers(tx) => {
                     let all_peers = self.peers.values().cloned().collect();
                     let _ = tx.send(all_peers);
                 }
             }
+            Ok(())
         }
-    }
-
-    async fn ban_peer(&mut self, addr: SocketAddr) {
-        warn!("[table] banning IP {} (Socket: {})", addr.ip(), addr);
-        self.ban_list
-            .insert(addr.ip(), Instant::now() + Duration::from_secs(86400));
-        if let Some(peer) = self.peers.remove(&addr) {
-            let _ = peer.disconnect().await;
-        }
-        self.addr_man.record_failure(addr);
     }
 }
 
@@ -129,21 +144,15 @@ pub struct PeerTable {
 
 impl PeerTable {
     pub fn new(addr_man: AddrMan) -> Self {
-        let (tx, rx) = mpsc::channel(1024);
         let actor = PeerTableActor {
             peers: HashMap::new(),
             addr_man,
             ban_list: HashMap::new(),
             scores: HashMap::new(),
-            receiver: rx,
         };
 
-        tokio::spawn(async move {
-            actor.run().await;
-        });
-
         Self {
-            actor: ActorRef::new(tx),
+            actor: actor.spawn(),
         }
     }
 
@@ -198,4 +207,9 @@ impl PeerTable {
     pub async fn get_peers(&self) -> Result<Vec<PeerHandle>, ActorError> {
         self.actor.call(|tx| PeerTableMessage::GetPeers(tx)).await
     }
+
+    pub async fn get_best_address(&self) -> Result<Option<SocketAddr>, ActorError> {
+        self.actor.call(|tx| PeerTableMessage::GetBestAddress(tx)).await
+    }
 }
+

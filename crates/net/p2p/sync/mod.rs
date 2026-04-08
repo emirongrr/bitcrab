@@ -1,0 +1,35 @@
+pub mod headers;
+pub mod blocks;
+
+use std::sync::Arc;
+use crate::p2p::actor::{Actor, ActorRef};
+use crate::p2p::peer_table::PeerTable;
+use bitcrab_storage::Store;
+
+pub use headers::{HeaderSyncActor, HeaderSyncMessage};
+pub use blocks::{BlockDownloadActor, BlockDownloadMessage};
+
+/// Top-level synchronization manager (Supervisor).
+#[derive(Clone)]
+pub struct SyncManager {
+    pub headers: ActorRef<HeaderSyncMessage>,
+    pub blocks: ActorRef<BlockDownloadMessage>,
+}
+
+impl SyncManager {
+    pub fn new(
+        store: Store, 
+        peer_table: PeerTable,
+        notifier: Option<tokio::sync::mpsc::Sender<(bitcrab_common::types::hash::BlockHash, bitcrab_common::types::block::BlockHeight)>>,
+    ) -> Self {
+        let headers = HeaderSyncActor::new(store.clone(), peer_table.clone()).spawn();
+        
+        let mut block_actor = BlockDownloadActor::new(store, peer_table);
+        if let Some(tx) = notifier {
+            block_actor = block_actor.with_notifier(tx);
+        }
+        let blocks = block_actor.spawn();
+        
+        Self { headers, blocks }
+    }
+}

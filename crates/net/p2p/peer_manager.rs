@@ -1,15 +1,3 @@
-//! Manages multiple Bitcoin P2P peer connections.
-//!
-//! Responsible for:
-//! - Connecting to peers and completing the handshake
-//! - Maintaining the active peer list
-//! - Disconnecting dead or timed-out peers
-//! - Providing access to peers for protocol operations
-//!
-//! Bitcoin Core: CConnman in src/net.h
-//!
-//! This is a simplified single-threaded version.
-//! Full concurrent peer management comes later.
 use crate::p2p::addr_man::AddrMan;
 use crate::p2p::messages::Message;
 use std::collections::HashSet;
@@ -17,12 +5,13 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tokio::net::TcpStream;
-use tokio::sync::mpsc::Receiver;
 use tokio::time::{timeout, Duration};
 use tracing::{debug, info, warn};
 
 use crate::p2p::{
+    actor::ActorRef,
     codec::{decode_header, encode_header, verify_checksum},
+    dispatcher::DispatchMessage,
     errors::P2pError,
     message::Magic,
     messages::{verack::Verack, version::Version, BitcoinMessage},
@@ -44,6 +33,7 @@ const HANDSHAKE_TIMEOUT_SECS: u64 = 30;
 pub struct PeerManager {
     pub table: PeerTable,
     magic: Magic,
+    pub dispatcher: ActorRef<DispatchMessage>,
     pub addr_man: Arc<Mutex<AddrMan>>,
     our_nonces: Arc<Mutex<HashSet<u64>>>,
     data_dir: Option<PathBuf>,
@@ -51,10 +41,11 @@ pub struct PeerManager {
 }
 
 impl PeerManager {
-    pub fn new(magic: Magic, table: PeerTable) -> Self {
+    pub fn new(magic: Magic, table: PeerTable, dispatcher: ActorRef<DispatchMessage>) -> Self {
         Self {
             table,
             magic,
+            dispatcher,
             addr_man: Arc::new(Mutex::new(AddrMan::new())),
             our_nonces: Arc::new(Mutex::new(HashSet::new())),
             data_dir: None,
@@ -139,7 +130,7 @@ impl PeerManager {
     ///
     /// Bitcoin Core: CConnman::OpenNetworkConnection() in src/net.cpp
     /// Connect to a specific address.
-    pub async fn connect(&self, addr: &str) -> Result<(PeerHandle, Receiver<Message>), P2pError> {
+    pub async fn connect(&self, addr: &str) -> Result<PeerHandle, P2pError> {
         let socket_addr = resolve(addr)?;
         self.connect_addr(socket_addr).await
     }
@@ -147,11 +138,11 @@ impl PeerManager {
     pub async fn connect_a(
         &self,
         addr: SocketAddr,
-    ) -> Result<(PeerHandle, Receiver<Message>), P2pError> {
+    ) -> Result<PeerHandle, P2pError> {
         self.connect_addr(addr).await
     }
 
-    pub async fn connect_best(&self) -> Result<(PeerHandle, Receiver<Message>), P2pError> {
+    pub async fn connect_best(&self) -> Result<PeerHandle, P2pError> {
         let addr = self
             .addr_man
             .lock()
@@ -167,7 +158,7 @@ impl PeerManager {
     pub async fn connect_addr(
         &self,
         socket_addr: SocketAddr,
-    ) -> Result<(PeerHandle, Receiver<Message>), P2pError> {
+    ) -> Result<PeerHandle, P2pError> {
         if self.is_banned(&socket_addr.ip()) {
             return Err(P2pError::Banned);
         }
@@ -190,14 +181,14 @@ impl PeerManager {
         info!("TCP connected to {}", socket_addr);
 
         match self.handshake(stream, socket_addr, false).await {
-            Ok(res) => {
+            Ok(handle) => {
                 self.addr_man.lock().unwrap().record_success(socket_addr);
                 self.table
-                    .add_peer(res.0.clone())
+                    .add_peer(handle.clone())
                     .await
                     .map_err(|_| P2pError::ConnectionClosed)?;
                 self.save_peers();
-                Ok(res)
+                Ok(handle)
             }
             Err(e) => {
                 self.addr_man.lock().unwrap().record_failure(socket_addr);
@@ -217,7 +208,7 @@ impl PeerManager {
         mut stream: TcpStream,
         addr: SocketAddr,
         is_inbound: bool,
-    ) -> Result<(PeerHandle, Receiver<Message>), P2pError> {
+    ) -> Result<PeerHandle, P2pError> {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
         let nonce = make_nonce();
@@ -271,7 +262,6 @@ impl PeerManager {
                 {
                     Message::Version(v) => {
                         // Self-connection detection.
-                        // Bitcoin Core: nonce check in src/net.cpp
                         if our_nonces_snapshot.contains(&v.nonce) {
                             return Err(P2pError::SelfConnection);
                         }
@@ -294,7 +284,6 @@ impl PeerManager {
                         );
 
                         if is_inbound {
-                            // Send our version back
                             stream.write_all(&header).await?;
                             stream.write_all(&payload).await?;
                             debug!("[{}] sent version nonce={} (inbound reply)", addr, nonce);
@@ -331,7 +320,7 @@ impl PeerManager {
 
         info!("[{}] handshake complete", addr);
 
-        let (handle, rx) = PeerHandle::start(
+        let handle = PeerHandle::start(
             addr,
             self.magic,
             stream,
@@ -341,6 +330,7 @@ impl PeerManager {
             peer_services,
             Arc::clone(&self.ban_list),
             self.table.clone(),
+            self.dispatcher.clone(),
         );
 
         if !is_inbound {
@@ -350,7 +340,7 @@ impl PeerManager {
                 .await;
         }
 
-        Ok((handle, rx))
+        Ok(handle)
     }
 
     pub fn peer_count(&self) -> usize {
