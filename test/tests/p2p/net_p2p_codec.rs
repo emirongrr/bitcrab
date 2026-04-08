@@ -70,7 +70,7 @@ fn rejected_oversized_message() {
     let mut buf = [0u8; 24];
     buf[0..4].copy_from_slice(&Magic::Mainnet.to_bytes());
     // Length: MAX_MESSAGE_SIZE + 1
-    buf[16..20].copy_from_slice(&(MAX_MESSAGE_SIZE + 1).to_le_bytes());
+    buf[16..20].copy_from_slice(&((MAX_MESSAGE_SIZE + 1) as u32).to_le_bytes());
     
     let result = decode_header(&buf, Magic::Mainnet);
     assert!(matches!(result, Err(P2pError::MessageTooLarge { .. })));

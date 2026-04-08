@@ -2,6 +2,9 @@ use bitcrab_net::p2p::message::Magic;
 use bitcrab_net::p2p::messages::{version::Version, verack::Verack, Message};
 use bitcrab_storage::InMemoryBackend;
 use bitcrab_net::p2p::peer_manager::PeerManager;
+use bitcrab_net::p2p::peer_table::PeerTable;
+use bitcrab_net::p2p::addr_man::AddrMan;
+
 use tokio::net::TcpListener;
 use std::sync::Arc;
 use std::time::Duration;
@@ -43,7 +46,9 @@ async fn test_handshake_flow_success() {
 
     // Node configuration
     let _storage = Arc::new(InMemoryBackend::open().unwrap());
-    let peer_manager = Arc::new(PeerManager::new(magic));
+    let table = PeerTable::new(AddrMan::new());
+    let peer_manager = Arc::new(PeerManager::new(magic, table));
+
 
     // Outbound Connect and Handshake
     let connect_res = peer_manager.connect_addr(local_addr).await;

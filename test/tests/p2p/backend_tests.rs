@@ -1,6 +1,9 @@
 use bitcrab_net::p2p::message::Magic;
 use bitcrab_net::p2p::peer_manager::PeerManager;
+use bitcrab_net::p2p::peer_table::PeerTable;
+use bitcrab_net::p2p::addr_man::AddrMan;
 use bitcrab_storage::InMemoryBackend;
+
 use tokio::time::timeout;
 
 use std::sync::Arc;
@@ -90,7 +93,9 @@ match read_result {
 
     // ── 2. Bitcrab node attempts handshake with mock ──────────────────────────
     let _storage = Arc::new(InMemoryBackend::open().unwrap());
-    let peer_manager = Arc::new(PeerManager::new(magic));
+    let table = PeerTable::new(AddrMan::new());
+    let peer_manager = Arc::new(PeerManager::new(magic, table));
+
 
     eprintln!("[bitcrab] connecting to mock peer at {local_addr}");
 

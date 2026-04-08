@@ -12,8 +12,15 @@ proptest = "1.4"
 rand = { version = "0.8", features = ["small_rng"] }
 bitcrab-node = { path = "../crates/node" }
 hex = "0.4"
+reqwest = { version = "0.11", features = ["json"] }
+serde_json = "1.0"
 
 [[test]]
+name = "rpc_integration"
+path = "tests/rpc_integration.rs"
+
+[[test]]
+
 name = "bitcrab_tests"
 path = "tests/tests.rs"
 

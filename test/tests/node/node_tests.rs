@@ -18,15 +18,17 @@ fn test_header(nonce: u32) -> BlockHeader {
     }
 }
 
-#[test]
-fn node_in_memory_starts_empty() {
+#[tokio::test]
+async fn node_in_memory_starts_empty() {
+
     let node = Node::in_memory(Magic::Regtest).unwrap();
     assert!(node.best_hash().unwrap().is_none());
     assert!(node.best_height().unwrap().is_none());
 }
 
-#[test]
-fn store_header_updates_best() {
+#[tokio::test]
+async fn store_header_updates_best() {
+
     let mut node = Node::in_memory(Magic::Regtest).unwrap();
     let header   = test_header(1);
     let hash     = header.block_hash();
@@ -37,8 +39,9 @@ fn store_header_updates_best() {
     assert_eq!(node.best_height().unwrap(), Some(BlockHeight(0)));
 }
 
-#[test]
-fn store_multiple_headers_height_tracks() {
+#[tokio::test]
+async fn store_multiple_headers_height_tracks() {
+
     let mut node = Node::in_memory(Magic::Regtest).unwrap();
 
     for i in 0..5u32 {
