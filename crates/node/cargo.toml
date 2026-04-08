@@ -2,7 +2,7 @@
 name           = "bitcrab-node"
 description    = "Chain state, block validation, UTXO set"
 version.workspace      = true
-edition.workspace      = true
+edition.workspace = true
 rust-version.workspace = true
 
 [lib]
@@ -12,6 +12,8 @@ path = "lib.rs"
 bitcrab-common.workspace  = true
 bitcrab-net.workspace     = true
 bitcrab-storage.workspace = true
-thiserror.workspace       = true
-tracing.workspace         = true
-tokio.workspace           = true
+bitcrab-rpc.workspace     = true
+thiserror.workspace = true
+tracing.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
