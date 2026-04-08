@@ -26,8 +26,10 @@ use crate::p2p::{
     errors::P2pError,
     message::Magic,
     messages::{BitcoinMessage, version::Version, verack::Verack},
-    peer::Peer,
+    peer::{PeerHandle, PeerInfo},
+    peer_table::PeerTable,
 };
+
 use bitcrab_common::constants::MIN_PEER_PROTO_VERSION;
 
 
@@ -42,26 +44,28 @@ const HANDSHAKE_TIMEOUT_SECS: u64 = 30;
 ///
 /// Bitcoin Core: CConnman in src/net.h
 pub struct PeerManager {
-    peers:      Mutex<HashSet<SocketAddr>>,
+    pub table:  PeerTable,
     magic:      Magic,
-    pub table:  Arc<Mutex<AddrMan>>,
+    pub addr_man: Arc<Mutex<AddrMan>>,
     our_nonces: Arc<Mutex<HashSet<u64>>>,
     data_dir:   Option<PathBuf>,
     pub ban_list: Arc<Mutex<std::collections::HashMap<std::net::IpAddr, tokio::time::Instant>>>,
 }
 
 
+
 impl PeerManager {
-    pub fn new(magic: Magic) -> Self {
+    pub fn new(magic: Magic, table: PeerTable) -> Self {
         Self {
-            peers:      Mutex::new(HashSet::new()),
+            table,
             magic,
-            table:      Arc::new(Mutex::new(AddrMan::new())),
+            addr_man:   Arc::new(Mutex::new(AddrMan::new())),
             our_nonces: Arc::new(Mutex::new(HashSet::new())),
             data_dir:   None,
             ban_list:   Arc::new(Mutex::new(std::collections::HashMap::new())),
         }
     }
+
 
     /// Ban an IP Address for a specific duration.
     pub fn ban(&self, ip: std::net::IpAddr, duration: tokio::time::Duration) {
@@ -82,16 +86,16 @@ impl PeerManager {
         false
     }
 
-    pub fn insert_peer(&self, addr: SocketAddr) {
-        self.peers.lock().unwrap().insert(addr);
+    pub fn insert_peer(&self, _addr: SocketAddr) {
+        // Obsolete: PeerActor now notifies PeerTable automatically.
     }
     
-    pub fn remove_peer(&self, addr: &SocketAddr) {
-        self.peers.lock().unwrap().remove(addr);
+    pub fn remove_peer(&self, _addr: &SocketAddr) {
+        // Obsolete: PeerActor now notifies PeerTable automatically.
     }
     pub fn with_data_dir(mut self, dir: PathBuf) -> Self {
         let peers_file = dir.join("peers.dat");
-        self.table = Arc::new(Mutex::new(AddrMan::load_or_default(&peers_file)));
+        self.addr_man = Arc::new(Mutex::new(AddrMan::load_or_default(&peers_file)));
         self.data_dir = Some(dir);
         self
     }
@@ -101,10 +105,11 @@ impl PeerManager {
 
         if let Some(ref dir) = self.data_dir {
             let path = dir.join("peers.dat");
-            if let Err(e) = self.table.lock().unwrap().save(&path) {
+            if let Err(e) = self.addr_man.lock().unwrap().save(&path) {
                 warn!("failed to save peer table: {}", e);
             }
         }}
+
 
     /// Seed the peer table from DNS.
     ///
@@ -118,8 +123,9 @@ impl PeerManager {
             }).await {
                 Ok(Ok(addrs)) => {
                     let count = addrs.len();
-                    self.table.lock().unwrap().add_many(addrs, "0.0.0.0:0".parse().unwrap());
+                    self.addr_man.lock().unwrap().add_many(addrs, "0.0.0.0:0".parse().unwrap());
                     debug!("DNS seed {} → {} addresses", seed, count);
+
                 }
                 _ => debug!("DNS seed {} failed", seed),
             }
@@ -132,19 +138,18 @@ impl PeerManager {
     ///
     /// Bitcoin Core: CConnman::OpenNetworkConnection() in src/net.cpp
     /// Connect to a specific address.
-    pub async fn connect(&self, addr: &str) -> Result<(Peer, Receiver<Message>), P2pError> {
+    pub async fn connect(&self, addr: &str) -> Result<(PeerHandle, Receiver<Message>), P2pError> {
         let socket_addr = resolve(addr)?;
         self.connect_addr(socket_addr).await
     }
 
-    pub async fn connect_a(&self, addr: SocketAddr) -> Result<(Peer, Receiver<Message>), P2pError> {
+    pub async fn connect_a(&self, addr: SocketAddr) -> Result<(PeerHandle, Receiver<Message>), P2pError> {
         self.connect_addr(addr).await
     }
 
-    pub async fn connect_best(&self) -> Result<(Peer, Receiver<Message>), P2pError> {
-        let active: Vec<_> = self.peers.lock().unwrap().iter().copied().collect();
-        let addr = self.table.lock().unwrap()
-            .select_best(&active)
+    pub async fn connect_best(&self) -> Result<(PeerHandle, Receiver<Message>), P2pError> {
+        let addr = self.addr_man.lock().unwrap()
+            .select_best(&[]) // TODO: provide active list from PeerTable
             .ok_or(P2pError::ConnectionFailed {
                 addr: "none".into(),
                 reason: "no connectable peers in table".into(),
@@ -152,7 +157,8 @@ impl PeerManager {
         self.connect_addr(addr).await
     }
 
-    pub async fn connect_addr(&self, socket_addr: SocketAddr) -> Result<(Peer, Receiver<Message>), P2pError> {
+
+    pub async fn connect_addr(&self, socket_addr: SocketAddr) -> Result<(PeerHandle, Receiver<Message>), P2pError> {
         if self.is_banned(&socket_addr.ip()) {
             return Err(P2pError::Banned);
         }
@@ -173,18 +179,20 @@ impl PeerManager {
         info!("TCP connected to {}", socket_addr);
 
         match self.handshake(stream, socket_addr, false).await {
-            Ok(peer) => {
-                self.table.lock().unwrap().record_success(socket_addr);
-                self.save_peers(); // persist after success
-                Ok(peer)
+            Ok(res) => {
+                self.addr_man.lock().unwrap().record_success(socket_addr);
+                self.table.add_peer(res.0.clone()).await.map_err(|_| P2pError::ConnectionClosed)?;
+                self.save_peers(); 
+                Ok(res)
             }
         Err(e) => {
-            self.table.lock().unwrap().record_failure(socket_addr);
-            self.save_peers(); // persist failures too
+            self.addr_man.lock().unwrap().record_failure(socket_addr);
+            self.save_peers(); 
             Err(e)
         }
         }
     }
+
     /// Run the version/verack handshake on an established stream.
     ///
     /// Bitcoin Core: version/verack exchange in src/net_processing.cpp
@@ -195,7 +203,8 @@ impl PeerManager {
     mut stream: TcpStream,
     addr: SocketAddr,
     is_inbound: bool,
-) -> Result<(Peer, Receiver<Message>), P2pError> {
+) -> Result<(PeerHandle, Receiver<Message>), P2pError> {
+
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     let nonce = make_nonce();
@@ -298,33 +307,46 @@ impl PeerManager {
 
     info!("[{}] handshake complete", addr);
 
-    Ok(Peer::start(
+    let (handle, rx) = PeerHandle::start(
         addr, 
-        magic, 
+        self.magic, 
         stream, 
         peer_version, 
         peer_agent, 
         peer_height, 
         peer_services,
-        Arc::clone(&self.ban_list)
-    ))
+        Arc::clone(&self.ban_list),
+        self.table.clone()
+    );
+
+    if !is_inbound {
+        debug!("[{}] requesting peers (getaddr) after handshake", addr);
+        let _ = handle.send(Message::GetAddr(crate::p2p::messages::addr::GetAddr)).await;
+    }
+
+    Ok((handle, rx))
+
 }
-    pub fn peer_count(&self) -> usize { self.peers.lock().unwrap().len() }
+
+    pub fn peer_count(&self) -> usize {
+        // Handled via actor call now. Returning 0 or similar if non-async access needed,
+        // but better to move caller to async.
+        0
+    }
     
-    // We remove `peers() -> &[Peer]` since it requires locking and returning a reference.
-    // Instead we can provide a method to get active peer addresses.
     pub fn active_addrs(&self) -> Vec<SocketAddr> {
-        self.peers.lock().unwrap().iter().copied().collect()
+        Vec::new()
     }
 
     pub fn prune_disconnected(&self) {
-        // Obsolete: since the async task explicitly removes on disconnect.
+        // Obsolete.
     }
 
     pub fn disconnect_all(&self) {
-        self.peers.lock().unwrap().clear();
+        // TODO: trigger via PeerTable.
     }
 }
+
 
 fn resolve(addr: &str) -> Result<SocketAddr, P2pError> {
     addr.parse().or_else(|_| {

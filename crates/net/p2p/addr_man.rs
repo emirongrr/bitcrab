@@ -14,6 +14,8 @@ use tracing::{debug, info};
 use serde::{Deserialize, Serialize};
 use std::{fs, path::Path};
 use rand::Rng;
+use crate::p2p::messages::addr::NetAddr;
+
 
 const ADDRMAN_NEW_BUCKET_COUNT: usize = 1024;
 const ADDRMAN_TRIED_BUCKET_COUNT: usize = 64;
@@ -86,7 +88,22 @@ impl AddrInfo {
     pub fn is_connectable(&self) -> bool {
         !self.is_banned() && !self.is_too_recent()
     }
+
+    pub fn to_net_addr(&self) -> NetAddr {
+        let ip_bytes = match self.addr.ip() {
+            IpAddr::V4(ipv4) => ipv4.to_ipv6_mapped().octets(),
+            IpAddr::V6(ipv6) => ipv6.octets(),
+        };
+
+        NetAddr {
+            time: self.last_connected.map(|t| t.elapsed().as_secs() as u32).unwrap_or(0),
+            services: 1, // Default to NODE_NETWORK, in production this should be stored or queried
+            ip: ip_bytes,
+            port: self.addr.port(),
+        }
+    }
 }
+
 
 pub struct AddrMan {
     pub map_info: HashMap<SocketAddr, AddrInfo>,
@@ -315,7 +332,32 @@ impl AddrMan {
     pub fn connectable_count(&self) -> usize {
         self.map_info.values().filter(|e| e.is_connectable()).count()
     }
+
+    /// Returns a random sample of known addresses for `addr` responses.
+    /// Max count recommended by Bitcoin protocol is 1000.
+    pub fn get_random_sample(&self, count: usize) -> Vec<NetAddr> {
+        let mut rng = rand::thread_rng();
+        let all_connectable: Vec<_> = self.map_info.values()
+            .filter(|e| e.is_connectable())
+            .collect();
+
+        if all_connectable.is_empty() {
+            return Vec::new();
+        }
+
+        let sample_size = count.min(all_connectable.len());
+        let mut indices: Vec<usize> = (0..all_connectable.len()).collect();
+        
+        // Simple shuffle and take
+        use rand::seq::SliceRandom;
+        indices.shuffle(&mut rng);
+
+        indices.iter().take(sample_size)
+            .map(|&i| all_connectable[i].to_net_addr())
+            .collect()
+    }
 }
+
 
 impl Default for AddrMan {
     fn default() -> Self {
