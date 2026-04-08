@@ -176,15 +176,15 @@ pub async fn init_node(config: NodeConfig) -> Result<NodeHandles, NodeError> {
     let cancel_token = CancellationToken::new();
     let tracker = TaskTracker::new();
 
-    // 3. Consensus Bridge (ChainManager)
+    // 3. Consensus Bridge (ChainstateManager)
     let (block_notify_tx, mut block_notify_rx) = tokio::sync::mpsc::channel(1024);
-    let chain_manager = bitcrab_consensus::ChainManager::new(store.clone()).spawn();
+    let chain_manager = bitcrab_consensus::ChainstateManager::new(store.clone()).spawn();
 
     let chain_handle = chain_manager.clone();
     tracker.spawn(async move {
         while let Some((hash, height)) = block_notify_rx.recv().await {
             let _ = chain_handle
-                .cast(bitcrab_consensus::ChainMessage::BlockDownloaded(
+                .cast(bitcrab_consensus::ChainstateMessage::BlockDownloaded(
                     hash, height,
                 ))
                 .await;

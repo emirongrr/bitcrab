@@ -3,28 +3,28 @@
 //! Blocks arrive via P2P out-of-order. ChainManager ensures they are
 //! connected to the UTXO set in strict height order.
 
-use crate::coins_view::{CoinsViewCache, StoreCoinsView};
-use crate::validator::TransactionValidator;
+use crate::coins::{CoinsViewCache, StoreCoinsView};
+use crate::validation::TransactionValidator;
 use bitcrab_common::types::{block::BlockHeight, hash::BlockHash};
 use bitcrab_net::p2p::actor::{Actor, ActorError, Context};
 use bitcrab_storage::Store;
 use std::collections::HashMap;
 use tracing::{debug, info, warn};
 
-pub enum ChainMessage {
+pub enum ChainstateMessage {
     /// Notify that a block has been downloaded and is ready for validation.
     BlockDownloaded(BlockHash, BlockHeight),
     /// Trigger an attempt to advance the chain tip.
     Advance,
 }
 
-pub struct ChainManager {
+pub struct ChainstateManager {
     store: Store,
     /// Blocks that have been downloaded but are waiting for their predecessor.
     waiting_blocks: HashMap<BlockHeight, BlockHash>,
 }
 
-impl ChainManager {
+impl ChainstateManager {
     pub fn new(store: Store) -> Self {
         Self {
             store,
@@ -32,8 +32,8 @@ impl ChainManager {
         }
     }
 
-    /// Attempt to connect as many sequential blocks as possible.
-    async fn drain_queue(&mut self) -> Result<(), ActorError> {
+    /// Attempt to connect as many sequential blocks as possible to the tip.
+    async fn activate_best_chain(&mut self) -> Result<(), ActorError> {
         loop {
             // 1. Determine the next height we need
             let current_hash = self
@@ -102,10 +102,13 @@ impl ChainManager {
                         .await
                         .map_err(|e| ActorError::Internal(e.to_string()))?;
 
-                    info!("[chain-manager] successfully connected block {}", hash);
+                    info!("[chainstate-manager] successfully connected block {}", hash);
                 }
                 Err(e) => {
-                    warn!("[chain-manager] consensus failed for block {}: {}", hash, e);
+                    warn!(
+                        "[chainstate-manager] consensus failed for block {}: {}",
+                        hash, e
+                    );
                     break;
                 }
             }
@@ -114,8 +117,8 @@ impl ChainManager {
     }
 }
 
-impl Actor for ChainManager {
-    type Message = ChainMessage;
+impl Actor for ChainstateManager {
+    type Message = ChainstateMessage;
 
     fn on_start(
         &mut self,
@@ -123,7 +126,7 @@ impl Actor for ChainManager {
     ) -> impl std::future::Future<Output = Result<(), ActorError>> + Send {
         let _handle = ctx.handle();
         async move {
-            info!("[chain-manager] starting chain state manager");
+            info!("[chainstate-manager] starting chain state manager");
             Ok(())
         }
     }
@@ -135,16 +138,16 @@ impl Actor for ChainManager {
     ) -> impl std::future::Future<Output = Result<(), ActorError>> + Send {
         async move {
             match msg {
-                ChainMessage::BlockDownloaded(hash, height) => {
+                ChainstateMessage::BlockDownloaded(hash, height) => {
                     debug!(
-                        "[chain-manager] block {} downloaded at height {}",
+                        "[chainstate-manager] block {} downloaded at height {}",
                         hash, height
                     );
                     self.waiting_blocks.insert(height, hash);
-                    self.drain_queue().await?;
+                    self.activate_best_chain().await?;
                 }
-                ChainMessage::Advance => {
-                    self.drain_queue().await?;
+                ChainstateMessage::Advance => {
+                    self.activate_best_chain().await?;
                 }
             }
             Ok(())
@@ -217,8 +220,8 @@ mod tests {
             .store_header(b1.header.clone(), BlockHeight(1), true)
             .unwrap();
 
-        // 2. Setup ChainManager
-        let mut manager = ChainManager::new(store.clone());
+        // 2. Setup ChainstateManager
+        let mut manager = ChainstateManager::new(store.clone());
 
         // 3. Receive b1 (out of order)
         let raw1 = b1.encode(Encoder::new()).finish();
@@ -230,7 +233,7 @@ mod tests {
             .waiting_blocks
             .insert(BlockHeight(1), b1.header.block_hash());
 
-        manager.drain_queue().await.unwrap();
+        manager.activate_best_chain().await.unwrap();
         assert!(store.get_best_block().unwrap().is_none());
 
         // 4. Receive b0 (fills the gap)
@@ -243,7 +246,7 @@ mod tests {
             .waiting_blocks
             .insert(BlockHeight(0), b0.header.block_hash());
 
-        manager.drain_queue().await.unwrap();
+        manager.activate_best_chain().await.unwrap();
 
         // Hashes should match
         assert_eq!(

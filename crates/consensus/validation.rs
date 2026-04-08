@@ -10,7 +10,7 @@ use thiserror::Error;
 use bitcrab_common::types::undo::BlockUndo;
 use bitcrab_script::interpreter::ScriptInterpreter;
 
-use crate::coins_view::{CoinsView, CoinsViewCache};
+use crate::coins::{CoinsView, CoinsViewCache};
 
 /// Errors that can occur during consensus validation.
 #[derive(Debug, Error, PartialEq, Eq)]
