@@ -19,6 +19,8 @@ pub enum HeaderSyncMessage {
     Maintenance,
     /// Process incoming headers response.
     HeadersReceived(PeerHandle, Headers),
+    /// A new peer is available, potentially use it for sync.
+    PeerConnected(PeerHandle),
 }
 
 pub struct HeaderSyncActor {
@@ -183,6 +185,13 @@ impl Actor for HeaderSyncActor {
                 }
                 HeaderSyncMessage::HeadersReceived(peer, headers) => {
                     let _ = self.handle_headers(peer, headers).await;
+                }
+                HeaderSyncMessage::PeerConnected(peer) => {
+                    if self.sync_peer.is_none() {
+                        info!("[headers] new peer {} connected, starting sync", peer.addr);
+                        self.sync_peer = Some(peer);
+                        self.request_headers().await;
+                    }
                 }
             }
             Ok(())

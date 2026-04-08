@@ -2,7 +2,10 @@
 
 use std::time::Duration;
 use tokio::time::interval;
-use tracing::{debug, info};
+use tracing::{debug, info, error};
+use std::collections::HashSet;
+use std::sync::{Arc, Mutex};
+use std::net::SocketAddr;
 
 use super::{
     actor::{Actor, ActorError, Context},
@@ -18,41 +21,58 @@ pub enum InitiatorMessage {
 
 pub struct ConnectionInitiator {
     peer_table: PeerTable,
-    manager: std::sync::Arc<PeerManager>,
+    manager: Arc<PeerManager>,
     target_outbound: usize,
+    pending_attempts: Arc<Mutex<HashSet<SocketAddr>>>,
 }
 
 impl ConnectionInitiator {
     pub fn new(
         peer_table: PeerTable,
-        manager: std::sync::Arc<PeerManager>,
+        manager: Arc<PeerManager>,
         target_outbound: usize,
     ) -> Self {
         Self {
             peer_table,
             manager,
             target_outbound,
+            pending_attempts: Arc::new(Mutex::new(HashSet::new())),
         }
     }
 
     async fn fill_connections(&self) {
         let current_count = self.peer_table.get_peer_count().await.unwrap_or(0);
-        if current_count >= self.target_outbound {
+        let pending_count = self.pending_attempts.lock().unwrap().len();
+        
+        if current_count + pending_count >= self.target_outbound {
             return;
         }
 
-        let needed = self.target_outbound - current_count;
+        let needed = self.target_outbound - (current_count + pending_count);
         debug!(
-            "[initiator] current peers: {}, needed: {}",
-            current_count, needed
+            "[initiator] current: {}, pending: {}, target: {}, needed: {}",
+            current_count, pending_count, self.target_outbound, needed
         );
 
         for _ in 0..needed {
-            if let Ok(Some(addr)) = self.peer_table.get_best_address().await {
+            let pending_list: Vec<SocketAddr> = self.pending_attempts.lock().unwrap().iter().cloned().collect();
+            
+            if let Ok(Some(addr)) = self.peer_table.get_best_address(pending_list).await {
+                // Mark as pending
+                self.pending_attempts.lock().unwrap().insert(addr);
+                
                 let mg = self.manager.clone();
+                let pending_tracker = self.pending_attempts.clone();
+                
                 tokio::spawn(async move {
-                    if let Err(e) = mg.connect_addr(addr).await {
+                    let res = mg.connect_addr(addr).await;
+                    // Remove from pending after attempt (success or failure)
+                    pending_tracker.lock().unwrap().remove(&addr);
+                    
+                    if let Err(e) = res {
                         debug!("[initiator] failed to connect to {}: {}", addr, e);
+                    } else {
+                        info!("[initiator] successfully connected to {}", addr);
                     }
                 });
             } else {

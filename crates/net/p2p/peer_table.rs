@@ -34,8 +34,8 @@ pub enum PeerTableMessage {
     GetAddresses(oneshot::Sender<Vec<NetAddr>>),
     /// Add multiple addresses to the address manager.
     AddAddresses(Vec<NetAddr>, SocketAddr),
-    /// Select the best address to connect to.
-    GetBestAddress(oneshot::Sender<Option<SocketAddr>>),
+    /// Select the best address to connect to, excluding already connected or pending ones.
+    GetBestAddress(Vec<SocketAddr>, oneshot::Sender<Option<SocketAddr>>),
     /// Get all active peer handles.
     GetPeers(oneshot::Sender<Vec<PeerHandle>>),
 }
@@ -121,11 +121,14 @@ impl Actor for PeerTableActor {
                         self.addr_man.add(addr.to_socket_addr(), source);
                     }
                 }
-                PeerTableMessage::GetBestAddress(tx) => {
+                PeerTableMessage::GetBestAddress(pending, tx) => {
+                    let mut exclude: Vec<SocketAddr> = self.peers.keys().cloned().collect();
+                    exclude.extend(pending);
+                    
                     let best = self
                         .addr_man
-                        .select_best_ipv4(&[])
-                        .or_else(|| self.addr_man.select_best(&[]));
+                        .select_best_ipv4(&exclude)
+                        .or_else(|| self.addr_man.select_best(&exclude));
                     let _ = tx.send(best);
                 }
                 PeerTableMessage::GetPeers(tx) => {
@@ -210,9 +213,12 @@ impl PeerTable {
         self.actor.call(|tx| PeerTableMessage::GetPeers(tx)).await
     }
 
-    pub async fn get_best_address(&self) -> Result<Option<SocketAddr>, ActorError> {
+    pub async fn get_best_address(
+        &self,
+        pending: Vec<SocketAddr>,
+    ) -> Result<Option<SocketAddr>, ActorError> {
         self.actor
-            .call(|tx| PeerTableMessage::GetBestAddress(tx))
+            .call(|tx| PeerTableMessage::GetBestAddress(pending, tx))
             .await
     }
 }

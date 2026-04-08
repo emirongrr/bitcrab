@@ -37,4 +37,9 @@ impl SyncManager {
 
         Self { headers, blocks }
     }
+
+    /// Notify the sync system that a new peer is available and ready for protocol messages.
+    pub async fn notify_peer_connected(&self, peer: crate::p2p::peer::PeerHandle) {
+        let _ = self.headers.cast(HeaderSyncMessage::PeerConnected(peer)).await;
+    }
 }

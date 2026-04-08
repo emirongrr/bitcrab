@@ -17,6 +17,7 @@ use crate::p2p::{
     messages::{verack::Verack, version::Version, BitcoinMessage},
     peer::PeerHandle,
     peer_table::PeerTable,
+    sync::SyncManager,
 };
 
 use bitcrab_common::constants::MIN_PEER_PROTO_VERSION;
@@ -38,6 +39,7 @@ pub struct PeerManager {
     our_nonces: Arc<Mutex<HashSet<u64>>>,
     data_dir: Option<PathBuf>,
     pub ban_list: Arc<Mutex<std::collections::HashMap<std::net::IpAddr, tokio::time::Instant>>>,
+    pub sync_manager: Option<SyncManager>,
 }
 
 impl PeerManager {
@@ -50,7 +52,13 @@ impl PeerManager {
             our_nonces: Arc::new(Mutex::new(HashSet::new())),
             data_dir: None,
             ban_list: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            sync_manager: None,
         }
+    }
+
+    pub fn with_sync(mut self, sync: SyncManager) -> Self {
+        self.sync_manager = Some(sync);
+        self
     }
 
     /// Ban an IP Address for a specific duration.
@@ -181,6 +189,16 @@ impl PeerManager {
                     .add_peer(handle.clone())
                     .await
                     .map_err(|_| P2pError::ConnectionClosed)?;
+                
+                // Notify sync manager if present
+                if let Some(ref sync) = self.sync_manager {
+                    let h = handle.clone();
+                    let s = sync.clone();
+                    tokio::spawn(async move {
+                        s.notify_peer_connected(h).await;
+                    });
+                }
+
                 self.save_peers();
                 Ok(handle)
             }

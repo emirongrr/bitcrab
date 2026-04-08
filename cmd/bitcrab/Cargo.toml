@@ -1,5 +1,5 @@
 [package]
-name = "bitcrab-bin"
+name = "bitcrab"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,6 +8,10 @@ license.workspace = true
 name = "bitcrab"
 path = "main.rs"
 
+[lib]
+name = "bitcrab"
+path = "lib.rs"
+
 [dependencies]
 # Internal
 bitcrab-common  = { workspace = true }
@@ -15,6 +19,7 @@ bitcrab-net     = { workspace = true }
 bitcrab-node    = { workspace = true }
 bitcrab-storage = { workspace = true }
 bitcrab-rpc     = { workspace = true }
+bitcrab-consensus = { workspace = true }
 
 # External
 clap.workspace       = true
@@ -24,3 +29,4 @@ tracing.workspace    = true
 tracing-subscriber.workspace = true
 thiserror.workspace  = true
 eyre = "0.6"
+dirs = "5.0"
