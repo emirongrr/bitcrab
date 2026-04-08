@@ -141,6 +141,48 @@ impl Store {
         Ok(Some(BlockHash::from_bytes(arr)))
     }
 
+    /// Fetch a coin from the UTXO set by its outpoint.
+    pub fn get_coin(&self, outpoint: &bitcrab_common::types::transaction::OutPoint) -> Result<Option<bitcrab_common::types::coin::Coin>, StoreError> {
+        let read = self.backend.begin_read()?;
+        
+        // Key: PREFIX_COIN (C) + txid + vout
+        let mut key = Vec::with_capacity(37);
+        key.push(tables::PREFIX_COIN);
+        key.extend_from_slice(outpoint.txid.as_bytes());
+        key.extend_from_slice(&outpoint.vout.to_le_bytes());
+
+        let Some(bytes) = read.get(tables::UTXOS, &key)? else {
+            return Ok(None);
+        };
+
+        let (coin, dec) = bitcrab_common::types::coin::Coin::decode(bitcrab_common::wire::decode::Decoder::new(&bytes))
+            .map_err(|e| StoreError::Decode(format!("failed to decode Coin: {}", e)))?;
+        dec.finish("Coin")
+            .map_err(|e| StoreError::Decode(e.to_string()))?;
+
+        Ok(Some(coin))
+    }
+
+    /// Atomically update the UTXO set and current tip.
+    pub async fn update_utxos(
+        &self,
+        coins: std::collections::HashMap<bitcrab_common::types::transaction::OutPoint, crate::worker::CoinUpdate>,
+        best_block_hash: Option<bitcrab_common::types::hash::BlockHash>,
+    ) -> Result<(), StoreError> {
+        let (tx, rx) = oneshot::channel();
+        self.worker_tx
+            .send(WriteMessage::UpdateUtxoSet {
+                coins,
+                best_block: best_block_hash,
+                reply_to: tx,
+            })
+            .await
+            .map_err(|_| StoreError::Custom("storage worker dead".into()))?;
+
+        rx.await
+            .map_err(|_| StoreError::Custom("storage worker dropped response".into()))?
+    }
+
     // ── Blocks ────────────────────────────────────────────────────────────────
 
     /// Append a full block to disk and update its index record with the file pointer.
@@ -156,6 +198,26 @@ impl Store {
                 header,
                 height,
                 raw_block,
+                reply_to: tx,
+            })
+            .await
+            .map_err(|_| StoreError::Custom("storage worker dead".into()))?;
+
+        rx.await
+            .map_err(|_| StoreError::Custom("storage worker dropped response".into()))?
+    }
+
+    /// Store the reversal state (undo data) for a specific block.
+    pub async fn store_undo(
+        &self,
+        block_hash: bitcrab_common::types::hash::BlockHash,
+        undo_data: bitcrab_common::types::undo::BlockUndo,
+    ) -> Result<(), StoreError> {
+        let (tx, rx) = oneshot::channel();
+        self.worker_tx
+            .send(WriteMessage::StoreUndo {
+                block_hash,
+                undo_data,
                 reply_to: tx,
             })
             .await

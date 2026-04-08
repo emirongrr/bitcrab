@@ -64,13 +64,17 @@ pub const UTXOS: &str = "utxos";
 /// Equivalent to the non-`b` records in Bitcoin Core's `blocks/index` LevelDB.
 pub const CHAIN_META: &str = "chain_meta";
 
-// ── Table registry ────────────────────────────────────────────────────────────
+/// Undo data (reversal state for UTXO set).
+///
+/// key   : 32-byte block hash
+/// value : serialized `BlockUndo` (all coins spent by this block)
+pub const BLOCK_UNDO: &str = "block_undo";
 
 /// Every column family opened at database startup.
 ///
 /// Column families present on disk but absent from this list are dropped
 /// on open — they belong to an older schema version.
-pub const TABLES: [&str; 3] = [BLOCK_INDEX, UTXOS, CHAIN_META];
+pub const TABLES: [&str; 4] = [BLOCK_INDEX, UTXOS, CHAIN_META, BLOCK_UNDO];
 
 // ── Key prefixes (byte-for-byte compatible with Bitcoin Core) ─────────────────
 

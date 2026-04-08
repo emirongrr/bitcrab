@@ -31,6 +31,18 @@ pub enum WriteMessage {
         raw_block: Vec<u8>,
         reply_to: oneshot::Sender<Result<FlatFilePos, StoreError>>,
     },
+    /// Store reversal state for reorg support.
+    StoreUndo {
+        block_hash: bitcrab_common::types::hash::BlockHash,
+        undo_data: bitcrab_common::types::undo::BlockUndo,
+        reply_to: oneshot::Sender<Result<(), StoreError>>,
+    },
+    /// Batch update the UTXO set.
+    UpdateUtxoSet {
+        coins: std::collections::HashMap<bitcrab_common::types::transaction::OutPoint, crate::worker::CoinUpdate>,
+        best_block: Option<bitcrab_common::types::hash::BlockHash>,
+        reply_to: oneshot::Sender<Result<(), StoreError>>,
+    },
     /// Flush all pending writes to disk.
     Flush {
         reply_to: oneshot::Sender<Result<(), StoreError>>,
@@ -79,6 +91,22 @@ impl StorageWorker {
                     reply_to,
                 } => {
                     let res = self.handle_store_block(header, height, &raw_block).await;
+                    let _ = reply_to.send(res);
+                }
+                WriteMessage::UpdateUtxoSet {
+                    coins,
+                    best_block,
+                    reply_to,
+                } => {
+                    let res = self.handle_update_utxo_set(coins, best_block);
+                    let _ = reply_to.send(res);
+                }
+                WriteMessage::StoreUndo {
+                    block_hash,
+                    undo_data,
+                    reply_to,
+                } => {
+                    let res = self.handle_store_undo(block_hash, undo_data);
                     let _ = reply_to.send(res);
                 }
                 WriteMessage::Flush { reply_to } => {
@@ -161,4 +189,56 @@ impl StorageWorker {
 
         Ok(pos)
     }
+
+    fn handle_update_utxo_set(
+        &self,
+        coins: std::collections::HashMap<bitcrab_common::types::transaction::OutPoint, CoinUpdate>,
+        best_block: Option<bitcrab_common::types::hash::BlockHash>,
+    ) -> Result<(), StoreError> {
+        let mut write = self.backend.begin_write()?;
+
+        for (outpoint, update) in coins {
+            let mut key = Vec::with_capacity(37);
+            key.push(tables::PREFIX_COIN);
+            key.extend_from_slice(outpoint.txid.as_bytes());
+            key.extend_from_slice(&outpoint.vout.to_le_bytes());
+
+            match update {
+                CoinUpdate::Add(coin) => {
+                    let value = bitcrab_common::wire::encode::Encoder::new()
+                        .encode_field(&coin)
+                        .finish();
+                    write.put(tables::UTXOS, &key, &value)?;
+                }
+                CoinUpdate::Remove => {
+                    write.delete(tables::UTXOS, &key)?;
+                }
+            }
+        }
+
+        if let Some(hash) = best_block {
+            write.put(tables::UTXOS, &[tables::KEY_BEST_BLOCK], hash.as_bytes())?;
+        }
+
+        write.commit()
+    }
+
+    fn handle_store_undo(
+        &self,
+        block_hash: bitcrab_common::types::hash::BlockHash,
+        undo_data: bitcrab_common::types::undo::BlockUndo,
+    ) -> Result<(), StoreError> {
+        let mut write = self.backend.begin_write()?;
+        let value = Encoder::new().encode_field(&undo_data).finish();
+        
+        write.put(tables::BLOCK_UNDO, block_hash.as_bytes(), &value)?;
+        write.commit()
+    }
+}
+
+pub enum CoinUpdate {
+    /// Add or update a coin in the UTXO set.
+    Add(bitcrab_common::types::coin::Coin),
+    /// Remove a coin (spent).
+    Remove,
 }
