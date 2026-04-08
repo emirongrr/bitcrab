@@ -1,0 +1,26 @@
+[package]
+name = "bitcrab-bin"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "bitcrab"
+path = "main.rs"
+
+[dependencies]
+# Internal
+bitcrab-common  = { workspace = true }
+bitcrab-net     = { workspace = true }
+bitcrab-node    = { workspace = true }
+bitcrab-storage = { workspace = true }
+bitcrab-rpc     = { workspace = true }
+
+# External
+clap.workspace       = true
+tokio.workspace      = true
+tokio-util.workspace = true
+tracing.workspace    = true
+tracing-subscriber.workspace = true
+thiserror.workspace  = true
+eyre = "0.6"
