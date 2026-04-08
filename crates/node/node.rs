@@ -11,16 +11,18 @@ use std::sync::Arc;
 use bitcrab_net::p2p::{
     addr_man::AddrMan,
     message::Magic,
-    messages::{getheaders::GetHeaders, Message},
     peer_manager::PeerManager,
     peer_table::PeerTable,
+    sync::SyncManager,
+    dispatcher::DispatcherActor,
+    actor::Actor,
 };
 
-use bitcrab_common::types::{block::BlockHeight, hash::BlockHash};
+use bitcrab_common::types::{block::{BlockHeight, Block}, hash::BlockHash};
 use bitcrab_storage::Store;
 
 use thiserror::Error;
-use tracing::{debug, info};
+use tracing::info;
 
 // ── Error ─────────────────────────────────────────────────────────────────────
 
@@ -42,6 +44,7 @@ pub enum NodeError {
 // ── Node ──────────────────────────────────────────────────────────────────────
 
 /// The main node — owns storage and the peer manager.
+#[derive(Clone)]
 pub struct Node {
     pub store: Store,
     pub peer_manager: Arc<PeerManager>,
@@ -52,7 +55,10 @@ impl Node {
     pub fn in_memory(magic: Magic) -> Result<Self, NodeError> {
         let store = Store::in_memory(magic).map_err(NodeError::Storage)?;
         let table = PeerTable::new(AddrMan::new());
-        let peer_manager = Arc::new(PeerManager::new(magic, table));
+        let sync = SyncManager::new(store.clone(), table.clone(), None);
+        let dispatcher = DispatcherActor::new(table.clone(), sync).spawn();
+        let peer_manager = Arc::new(PeerManager::new(magic, table, dispatcher));
+        
         Ok(Self {
             store,
             peer_manager,
@@ -73,70 +79,6 @@ impl Node {
         });
     }
 
-    /// Connect to a peer, send getheaders from our tip, store received headers.
-    ///
-    /// Returns the number of headers stored.
-    ///
-    /// Bitcoin Core: SendMessages() → getheaders in src/net_processing.cpp
-    pub async fn sync_headers_from(&mut self, addr: SocketAddr) -> Result<usize, NodeError> {
-        // Connect and handshake.
-        let (peer, mut rx) = self.peer_manager.connect_addr(addr).await?;
-
-        info!("[sync] connected to {addr}, starting header sync");
-
-        // Build locator from our best block, or genesis if empty.
-        let tip = self.store.get_best_block()?.unwrap_or(BlockHash::zero());
-
-        let getheaders = GetHeaders::from_tip(tip);
-        peer.send(Message::GetHeaders(getheaders))
-            .await
-            .map_err(|_e| bitcrab_net::p2p::errors::P2pError::ConnectionClosed)?;
-
-        info!("[sync] sent getheaders (tip={})", tip);
-
-        // Wait for the headers response.
-        let headers_msg = loop {
-            match rx.recv().await {
-                Some(Message::Headers(h)) => break h,
-                Some(other) => {
-                    // Ignore non-headers messages (inv, ping, etc.)
-                    debug!("[sync] ignoring message during header wait: {other}");
-                }
-                None => return Err(NodeError::ChannelClosed),
-            }
-        };
-
-        let count = headers_msg.headers.len();
-        info!("[sync] received {count} headers from {addr}");
-
-        if count == 0 {
-            return Err(NodeError::NoHeaders);
-        }
-
-        // Store each header.
-        // We don't know exact heights yet — we derive them from chain position.
-        // For now: start from best_height + 1, increment per header.
-        let start_height = self
-            .best_height()?
-            .map(|h| h.next())
-            .unwrap_or(BlockHeight::GENESIS);
-
-        for (i, header) in headers_msg.headers.iter().enumerate() {
-            let height = BlockHeight(start_height.0 + i as u32);
-            let is_best = i == count - 1;
-            self.store
-                .store_header(header.clone(), height, is_best)
-                .await?;
-        }
-
-        info!(
-            "[sync] stored {count} headers, new tip height={}",
-            start_height.0 + count as u32 - 1
-        );
-
-        Ok(count)
-    }
-
     /// Current best block height from storage.
     pub fn best_height(&self) -> Result<Option<BlockHeight>, NodeError> {
         let Some(hash) = self.store.get_best_block()? else {
@@ -151,6 +93,36 @@ impl Node {
     /// Current best block hash from storage.
     pub fn best_hash(&self) -> Result<Option<BlockHash>, NodeError> {
         Ok(self.store.get_best_block()?)
+    }
+
+    /// Process a new block: validate its transactions and update the UTXO set.
+    ///
+    /// Matches Bitcoin Core's `ProcessNewBlock` / `ConnectBlock` logic.
+    pub async fn process_block(&self, block: &Block, height: BlockHeight) -> Result<(), NodeError> {
+        info!("[node] processing block {} at height {}", block.header.block_hash(), height);
+
+        // 1. Initialize the UTXO view starting from the persistence layer (Store)
+        let base_view = crate::consensus::coins_view::StoreCoinsView::new(self.store.clone());
+        let mut cache_view = crate::consensus::coins_view::CoinsViewCache::new(base_view);
+
+        // 2. Perform consensus validation and connect the block to the cache
+        let (_fees, undo) = crate::consensus::validator::TransactionValidator::connect_block(block, height, &mut cache_view)
+            .map_err(|e| {
+                tracing::error!("Consensus validation failed for block {}: {}", block.header.block_hash(), e);
+                NodeError::ChannelClosed // TODO: Better error propagation
+            })?;
+
+        // 3. Store the reversal state (Undo data) for reorg support
+        self.store.store_undo(block.header.block_hash(), undo).await
+            .map_err(|_| NodeError::ChannelClosed)?;
+
+        // 4. Persist the updated UTXO set and block tip atomically
+        let store_view = crate::consensus::coins_view::StoreCoinsView::new(self.store.clone());
+        store_view.flush(&cache_view).await
+            .map_err(NodeError::Storage)?;
+
+        info!("[node] successfully connected block {}", block.header.block_hash());
+        Ok(())
     }
 }
 
@@ -167,6 +139,7 @@ pub struct NodeConfig {
 
 pub struct NodeHandles {
     pub node: Node,
+    pub block_notifier: tokio::sync::mpsc::Sender<(BlockHash, BlockHeight)>,
     pub cancel_token: CancellationToken,
     pub tracker: TaskTracker,
 }
@@ -185,20 +158,33 @@ pub async fn init_node(config: NodeConfig) -> Result<NodeHandles, NodeError> {
         Store::in_memory(config.magic).map_err(NodeError::Storage)?
     };
 
-    // 2. Networking
+    // 2. Orchestration
+    let cancel_token = CancellationToken::new();
+    let tracker = TaskTracker::new();
+
+    // 3. Consensus Bridge (ChainManager)
+    let (block_notify_tx, mut block_notify_rx) = tokio::sync::mpsc::channel(1024);
+    let chain_manager = crate::consensus::chain_manager::ChainManager::new(store.clone()).spawn();
+
+    let chain_handle = chain_manager.clone();
+    tracker.spawn(async move {
+        while let Some((hash, height)) = block_notify_rx.recv().await {
+            let _ = chain_handle.cast(crate::consensus::chain_manager::ChainMessage::BlockDownloaded(hash, height)).await;
+        }
+    });
+
+    // 4. Networking Actor Stack
     let table = PeerTable::new(AddrMan::new());
-    let peer_manager = Arc::new(PeerManager::new(config.magic, table));
+    let sync = SyncManager::new(store.clone(), table.clone(), Some(block_notify_tx));
+    let dispatcher = DispatcherActor::new(table.clone(), sync).spawn();
+    let peer_manager = Arc::new(PeerManager::new(config.magic, table, dispatcher));
 
     let node = Node {
         store: store.clone(),
         peer_manager: peer_manager.clone(),
     };
 
-    // 3. Orchestration
-    let cancel_token = CancellationToken::new();
-    let tracker = TaskTracker::new();
-
-    // 4. P2P Networking Loop
+    // 5. P2P Networking Maintenance
     let p2p_manager = peer_manager.clone();
     let p2p_config = bitcrab_net::p2p::network::NetworkConfig {
         magic: config.magic,
@@ -208,6 +194,7 @@ pub async fn init_node(config: NodeConfig) -> Result<NodeHandles, NodeError> {
             _ => 38333,
         },
     };
+    
     let p2p_cancel = cancel_token.clone();
     tracker.spawn(async move {
         tokio::select! {
@@ -222,7 +209,7 @@ pub async fn init_node(config: NodeConfig) -> Result<NodeHandles, NodeError> {
         }
     });
 
-    // 5. RPC (Optional)
+    // 6. RPC (Optional)
     if let Some(rpc_addr) = config.rpc_addr {
         let rpc_ctx = bitcrab_rpc::context::RpcContext::new(store.clone(), peer_manager.clone());
 
@@ -245,6 +232,7 @@ pub async fn init_node(config: NodeConfig) -> Result<NodeHandles, NodeError> {
 
     Ok(NodeHandles {
         node,
+        block_notifier: block_notify_tx,
         cancel_token,
         tracker,
     })
