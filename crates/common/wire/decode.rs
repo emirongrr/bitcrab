@@ -286,15 +286,21 @@ pub(crate) fn read_varint_raw(buf: &[u8]) -> Option<(u64, usize)> {
     match buf.first()? {
         &n @ 0x00..=0xFC => Some((n as u64, 1)),
         0xFD => {
-            if buf.len() < 3 { return None; }
+            if buf.len() < 3 {
+                return None;
+            }
             Some((u16::from_le_bytes(buf[1..3].try_into().unwrap()) as u64, 3))
         }
         0xFE => {
-            if buf.len() < 5 { return None; }
+            if buf.len() < 5 {
+                return None;
+            }
             Some((u32::from_le_bytes(buf[1..5].try_into().unwrap()) as u64, 5))
         }
         0xFF => {
-            if buf.len() < 9 { return None; }
+            if buf.len() < 9 {
+                return None;
+            }
             Some((u64::from_le_bytes(buf[1..9].try_into().unwrap()), 9))
         }
     }
@@ -303,4 +309,3 @@ pub(crate) fn read_varint_raw(buf: &[u8]) -> Option<(u64, usize)> {
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
-

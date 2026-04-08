@@ -46,9 +46,13 @@ impl DecodeError {
     /// Attach field name to this decode error for logging/debug
     pub fn with_field(self, field: &'static str) -> Self {
         match self {
-            DecodeError::BufferTooShort { needed, available, .. } => {
-                DecodeError::BufferTooShort { field, needed, available }
-            }
+            DecodeError::BufferTooShort {
+                needed, available, ..
+            } => DecodeError::BufferTooShort {
+                field,
+                needed,
+                available,
+            },
             DecodeError::TruncatedVarint { .. } => DecodeError::TruncatedVarint { field },
             DecodeError::InvalidUtf8 { .. } => DecodeError::InvalidUtf8 { field },
             DecodeError::InvalidValue { value, .. } => DecodeError::InvalidValue { field, value },

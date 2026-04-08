@@ -3,12 +3,11 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};
 
 use bitcrab_common::types::block::{BlockHeader, BlockHeight, BlockIndex};
-use bitcrab_common::FlatFilePos;
 use bitcrab_common::types::hash::BlockHash;
 use bitcrab_common::wire::decode::{BitcoinDecode, Decoder};
+use bitcrab_common::FlatFilePos;
 
-
-use crate::api::{StorageBackend, tables};
+use crate::api::{tables, StorageBackend};
 use crate::backend::in_memory::InMemoryBackend;
 #[cfg(feature = "rocksdb")]
 use crate::backend::rocksdb::RocksDBBackend;
@@ -26,7 +25,7 @@ pub enum EngineType {
 }
 
 /// The high-level storage orchestrator for the bitcrab node.
-/// 
+///
 /// - Reads: Direct and concurrent via Arc<dyn StorageBackend>.
 /// - Writes: Sequential and asynchronous via StorageWorker actor.
 #[derive(Clone)]
@@ -38,7 +37,11 @@ pub struct Store {
 
 impl Store {
     /// Open or create a new store at the given path.
-    pub fn new(path: impl Into<PathBuf>, engine: EngineType, magic: Magic) -> Result<Self, StoreError> {
+    pub fn new(
+        path: impl Into<PathBuf>,
+        engine: EngineType,
+        magic: Magic,
+    ) -> Result<Self, StoreError> {
         let path = path.into();
         let backend: Arc<dyn StorageBackend> = match engine {
             EngineType::InMemory => Arc::new(InMemoryBackend::open()?),
@@ -64,15 +67,15 @@ impl Store {
         // Start the sequential write worker
         let (tx, rx) = mpsc::channel(1024);
         let worker = StorageWorker::new(Arc::clone(&backend), block_file_manager, rx);
-        
+
         tokio::spawn(async move {
             worker.run().await;
         });
 
-        Ok(Self { 
-            backend, 
+        Ok(Self {
+            backend,
             block_reader,
-            worker_tx: tx 
+            worker_tx: tx,
         })
     }
 
@@ -91,21 +94,25 @@ impl Store {
         is_best: bool,
     ) -> Result<(), StoreError> {
         let (tx, rx) = oneshot::channel();
-        self.worker_tx.send(WriteMessage::StoreHeader {
-            header,
-            height,
-            is_best,
-            reply_to: tx,
-        }).await.map_err(|_| StoreError::Custom("storage worker dead".into()))?;
+        self.worker_tx
+            .send(WriteMessage::StoreHeader {
+                header,
+                height,
+                is_best,
+                reply_to: tx,
+            })
+            .await
+            .map_err(|_| StoreError::Custom("storage worker dead".into()))?;
 
-        rx.await.map_err(|_| StoreError::Custom("storage worker dropped response".into()))?
+        rx.await
+            .map_err(|_| StoreError::Custom("storage worker dropped response".into()))?
     }
 
     /// Retrieve a block index (header + metadata) by hash.
     /// Performs a direct thread-safe read from the backend.
     pub fn get_block_index(&self, hash: &BlockHash) -> Result<Option<BlockIndex>, StoreError> {
         let read = self.backend.begin_read()?;
-        
+
         let mut key = Vec::with_capacity(33);
         key.push(tables::PREFIX_BLOCK);
         key.extend_from_slice(hash.as_bytes());
@@ -116,8 +123,9 @@ impl Store {
 
         let (index, dec) = BlockIndex::decode(Decoder::new(&bytes))
             .map_err(|e| StoreError::Decode(format!("failed to decode BlockIndex: {}", e)))?;
-        dec.finish("BlockIndex").map_err(|e| StoreError::Decode(e.to_string()))?;
-        
+        dec.finish("BlockIndex")
+            .map_err(|e| StoreError::Decode(e.to_string()))?;
+
         Ok(Some(index))
     }
 
@@ -136,16 +144,25 @@ impl Store {
     // ── Blocks ────────────────────────────────────────────────────────────────
 
     /// Append a full block to disk and update its index record with the file pointer.
-    pub async fn store_block(&self, header: BlockHeader, height: BlockHeight, raw_block: Vec<u8>) -> Result<FlatFilePos, StoreError> {
+    pub async fn store_block(
+        &self,
+        header: BlockHeader,
+        height: BlockHeight,
+        raw_block: Vec<u8>,
+    ) -> Result<FlatFilePos, StoreError> {
         let (tx, rx) = oneshot::channel();
-        self.worker_tx.send(WriteMessage::StoreBlock {
-            header,
-            height,
-            raw_block,
-            reply_to: tx,
-        }).await.map_err(|_| StoreError::Custom("storage worker dead".into()))?;
+        self.worker_tx
+            .send(WriteMessage::StoreBlock {
+                header,
+                height,
+                raw_block,
+                reply_to: tx,
+            })
+            .await
+            .map_err(|_| StoreError::Custom("storage worker dead".into()))?;
 
-        rx.await.map_err(|_| StoreError::Custom("storage worker dropped response".into()))?
+        rx.await
+            .map_err(|_| StoreError::Custom("storage worker dropped response".into()))?
     }
 
     /// Retrieve raw block bytes from disk by hash.
@@ -166,11 +183,13 @@ impl Store {
     /// Flush buffers to disk.
     pub async fn flush(&self) -> Result<(), StoreError> {
         let (tx, rx) = oneshot::channel();
-        self.worker_tx.send(WriteMessage::Flush {
-            reply_to: tx,
-        }).await.map_err(|_| StoreError::Custom("storage worker dead".into()))?;
+        self.worker_tx
+            .send(WriteMessage::Flush { reply_to: tx })
+            .await
+            .map_err(|_| StoreError::Custom("storage worker dead".into()))?;
 
-        rx.await.map_err(|_| StoreError::Custom("storage worker dropped response".into()))?
+        rx.await
+            .map_err(|_| StoreError::Custom("storage worker dropped response".into()))?
     }
 }
 

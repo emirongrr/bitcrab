@@ -53,7 +53,9 @@ impl Encoder {
     }
 
     pub fn with_capacity(n: usize) -> Self {
-        Self { buf: Vec::with_capacity(n) }
+        Self {
+            buf: Vec::with_capacity(n),
+        }
     }
 
     /// Encode a field and chain.
@@ -94,8 +96,6 @@ impl BitcoinEncode for u8 {
         enc.push_u8(*self)
     }
 }
-
-
 
 impl BitcoinEncode for u32 {
     /// Little-endian u32.
@@ -163,15 +163,9 @@ impl BitcoinEncode for VarInt {
     fn encode(&self, enc: Encoder) -> Encoder {
         match self.0 {
             n @ 0x00..=0xFC => enc.push_u8(n as u8),
-            n @ 0xFD..=0xFFFF => enc
-                .push_u8(0xFD)
-                .push_bytes(&(n as u16).to_le_bytes()),
-            n @ 0x10000..=0xFFFF_FFFF => enc
-                .push_u8(0xFE)
-                .push_bytes(&(n as u32).to_le_bytes()),
-            n => enc
-                .push_u8(0xFF)
-                .push_bytes(&n.to_le_bytes()),
+            n @ 0xFD..=0xFFFF => enc.push_u8(0xFD).push_bytes(&(n as u16).to_le_bytes()),
+            n @ 0x10000..=0xFFFF_FFFF => enc.push_u8(0xFE).push_bytes(&(n as u32).to_le_bytes()),
+            n => enc.push_u8(0xFF).push_bytes(&n.to_le_bytes()),
         }
     }
 }
@@ -184,8 +178,7 @@ pub struct VarStr<'a>(pub &'a str);
 impl BitcoinEncode for VarStr<'_> {
     fn encode(&self, enc: Encoder) -> Encoder {
         let b = self.0.as_bytes();
-        enc.encode_field(&VarInt(b.len() as u64))
-           .push_bytes(b)
+        enc.encode_field(&VarInt(b.len() as u64)).push_bytes(b)
     }
 }
 

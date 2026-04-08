@@ -1,11 +1,11 @@
 use crate::api::{
-    PrefixResult, StorageBackend, StorageLockedView, StorageReadView, StorageWriteBatch,
     tables::{BLOCK_INDEX, CHAIN_META, TABLES, UTXOS},
+    PrefixResult, StorageBackend, StorageLockedView, StorageReadView, StorageWriteBatch,
 };
 use crate::error::StoreError;
 use rocksdb::{
-    BlockBasedOptions, Cache, ColumnFamilyDescriptor, DBWithThreadMode, MultiThreaded, Options,
-    SnapshotWithThreadMode, WriteBatch, checkpoint::Checkpoint,
+    checkpoint::Checkpoint, BlockBasedOptions, Cache, ColumnFamilyDescriptor, DBWithThreadMode,
+    MultiThreaded, Options, SnapshotWithThreadMode, WriteBatch,
 };
 use std::collections::HashSet;
 use std::path::Path;
@@ -65,9 +65,8 @@ impl RocksDBBackend {
         opts.set_advise_random_on_open(false);
         opts.set_compression_type(rocksdb::DBCompressionType::None);
 
-        let existing_cfs =
-            DBWithThreadMode::<MultiThreaded>::list_cf(&opts, path.as_ref())
-                .unwrap_or_else(|_| vec!["default".to_string()]);
+        let existing_cfs = DBWithThreadMode::<MultiThreaded>::list_cf(&opts, path.as_ref())
+            .unwrap_or_else(|_| vec!["default".to_string()]);
 
         let mut all_cfs_to_open = HashSet::new();
         all_cfs_to_open.extend(existing_cfs.iter().cloned());
@@ -215,12 +214,14 @@ impl StorageBackend for RocksDBBackend {
     }
 
     fn begin_read(&self) -> Result<Arc<dyn StorageReadView>, StoreError> {
-        Ok(Arc::new(RocksDBReadTx { db: self.db.clone() }))
+        Ok(Arc::new(RocksDBReadTx {
+            db: self.db.clone(),
+        }))
     }
 
     fn begin_write(&self) -> Result<Box<dyn StorageWriteBatch + 'static>, StoreError> {
         Ok(Box::new(RocksDBWriteTx {
-            db:    self.db.clone(),
+            db: self.db.clone(),
             batch: WriteBatch::default(),
         }))
     }
@@ -301,7 +302,7 @@ impl StorageReadView for RocksDBReadTx {
 /// atomic unit on [`commit`](StorageWriteBatch::commit). If the process
 /// crashes before commit, no partial writes are visible on restart.
 pub struct RocksDBWriteTx {
-    db:    Arc<DBWithThreadMode<MultiThreaded>>,
+    db: Arc<DBWithThreadMode<MultiThreaded>>,
     batch: WriteBatch,
 }
 
@@ -362,9 +363,9 @@ impl StorageWriteBatch for RocksDBWriteTx {
 /// visible through this view. Primarily used during UTXO set iteration
 /// where a consistent point-in-time view is required.
 pub struct RocksDBLocked {
-    db:   &'static Arc<DBWithThreadMode<MultiThreaded>>,
+    db: &'static Arc<DBWithThreadMode<MultiThreaded>>,
     lock: SnapshotWithThreadMode<'static, DBWithThreadMode<MultiThreaded>>,
-    cf:   Arc<rocksdb::BoundColumnFamily<'static>>,
+    cf: Arc<rocksdb::BoundColumnFamily<'static>>,
 }
 
 unsafe impl Send for RocksDBLocked {}

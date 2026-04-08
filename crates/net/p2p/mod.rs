@@ -1,3 +1,5 @@
+pub mod actor;
+pub mod addr_man;
 pub mod codec;
 pub mod connection;
 pub mod errors;
@@ -5,8 +7,6 @@ pub mod message;
 pub mod messages;
 pub mod network;
 pub mod peer;
-pub mod sync;
 pub mod peer_manager;
-pub mod addr_man;
-pub mod actor;
 pub mod peer_table;
+pub mod sync;

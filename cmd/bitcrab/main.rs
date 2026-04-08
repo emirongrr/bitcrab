@@ -1,12 +1,11 @@
 use clap::{Parser, Subcommand};
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use tracing::{info, error, warn};
+use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 
-use bitcrab_node::{init_node, NodeConfig, NodeHandles};
 use bitcrab_net::p2p::message::Magic;
-
+use bitcrab_node::{init_node, NodeConfig, NodeHandles};
 
 #[derive(Parser)]
 #[command(name = "bitcrab", version, about = "Minimal Bitcoin full node")]
@@ -47,11 +46,8 @@ enum Commands {
         rpc_addr: SocketAddr,
     },
     /// Connect to a peer and handshake (legacy tool)
-    Connect {
-        addr: String,
-    },
+    Connect { addr: String },
 }
-
 
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
@@ -61,7 +57,7 @@ async fn main() -> eyre::Result<()> {
             EnvFilter::from_default_env()
                 .add_directive("bitcrab=info".parse().unwrap())
                 .add_directive("bitcrab_net=info".parse().unwrap())
-                .add_directive("bitcrab_rpc=info".parse().unwrap())
+                .add_directive("bitcrab_rpc=info".parse().unwrap()),
         )
         .init();
 
@@ -90,8 +86,11 @@ async fn main() -> eyre::Result<()> {
         }
     };
 
-    let NodeHandles { cancel_token, tracker, .. } = handles;
-
+    let NodeHandles {
+        cancel_token,
+        tracker,
+        ..
+    } = handles;
 
     // 4. Wait for Signals (Graceful Shutdown)
     info!("[main] bitcrab node is running. Press Ctrl+C to stop.");
@@ -105,7 +104,7 @@ async fn main() -> eyre::Result<()> {
     let sigterm_recv = sigterm.recv();
     #[cfg(not(unix))]
     let sigterm_recv = std::future::pending::<()>();
-    
+
     tokio::select! {
         _ = ctrl_c => {
             info!("[main] Ctrl+C received, shutting down...");
@@ -115,11 +114,9 @@ async fn main() -> eyre::Result<()> {
         }
     }
 
-
-
     // 5. Cleanup
     cancel_token.cancel();
-    
+
     info!("[main] waiting for background tasks to finish...");
     // Wait for all tasks in the tracker to complete (with timeout)
     tokio::select! {
@@ -139,7 +136,10 @@ async fn run_legacy_connect(addr: String, magic: Magic) -> eyre::Result<()> {
     match connect(&addr, magic).await {
         Ok((_manager, peer, _rx)) => {
             let info = peer.get_info().await?;
-            info!("Connected to peer: {} v{} UA:{}", info.addr, info.version, info.user_agent);
+            info!(
+                "Connected to peer: {} v{} UA:{}",
+                info.addr, info.version, info.user_agent
+            );
         }
         Err(e) => error!("Connection failed: {}", e),
     }

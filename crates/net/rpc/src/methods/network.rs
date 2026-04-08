@@ -1,7 +1,7 @@
-use serde::Serialize;
-use serde_json::{json, Value};
 use crate::context::RpcContext;
 use crate::methods::RpcError;
+use serde::Serialize;
+use serde_json::{json, Value};
 
 #[derive(Debug, Serialize)]
 pub struct GetNetworkInfoResponse {
@@ -20,8 +20,7 @@ pub struct GetNetworkInfoResponse {
 }
 
 pub async fn get_network_info(ctx: RpcContext) -> Result<Value, RpcError> {
-    let connections = ctx.peer_manager.table.get_peer_count().await
-        .unwrap_or(0);
+    let connections = ctx.peer_manager.table.get_peer_count().await.unwrap_or(0);
 
     let resp = GetNetworkInfoResponse {
         version: 260000,
@@ -56,7 +55,11 @@ pub struct PeerInfoResponse {
 }
 
 pub async fn get_peer_info(ctx: RpcContext) -> Result<Value, RpcError> {
-    let peers = ctx.peer_manager.table.get_peers().await
+    let peers = ctx
+        .peer_manager
+        .table
+        .get_peers()
+        .await
         .map_err(|e| RpcError {
             code: -32603,
             message: e.to_string(),
@@ -85,7 +88,11 @@ pub async fn get_peer_info(ctx: RpcContext) -> Result<Value, RpcError> {
 }
 
 pub async fn get_connection_count(ctx: RpcContext) -> Result<Value, RpcError> {
-    let count = ctx.peer_manager.table.get_peer_count().await
+    let count = ctx
+        .peer_manager
+        .table
+        .get_peer_count()
+        .await
         .map_err(|e| RpcError {
             code: -32603,
             message: e.to_string(),

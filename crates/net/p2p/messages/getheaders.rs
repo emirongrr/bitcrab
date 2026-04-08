@@ -5,11 +5,11 @@
 //!
 //! Bitcoin Core: ProcessGetHeaders() in src/net_processing.cpp
 
+use crate::p2p::message::Command;
 use bitcrab_common::{
     types::hash::BlockHash,
-    wire::{Decoder, Encoder, encode::{VarInt}, error::DecodeError},
+    wire::{encode::VarInt, error::DecodeError, Decoder, Encoder},
 };
-use crate::p2p::message::Command;
 
 use super::BitcoinMessage;
 
@@ -23,9 +23,9 @@ use super::BitcoinMessage;
 pub struct GetHeaders {
     /// Protocol version.
     /// Bitcoin Core: nVersion field in getheaders
-    pub version:   u32,
+    pub version: u32,
     /// Hashes we have, most recent first.
-    pub locator:   Vec<BlockHash>,
+    pub locator: Vec<BlockHash>,
     /// All-zeros = get as many as possible (up to 2000).
     /// Bitcoin Core: MAX_HEADERS_RESULTS = 2000 in src/net_processing.cpp
     pub stop_hash: BlockHash,
@@ -34,8 +34,8 @@ pub struct GetHeaders {
 impl GetHeaders {
     pub fn from_tip(tip: BlockHash) -> Self {
         Self {
-            version:   70015,
-            locator:   vec![tip],
+            version: 70015,
+            locator: vec![tip],
             stop_hash: BlockHash::ZERO,
         }
     }
@@ -56,8 +56,8 @@ impl BitcoinMessage for GetHeaders {
 
     fn decode(payload: &[u8]) -> Result<Self, DecodeError> {
         let dec = Decoder::new(payload);
-        let (version,       dec) = dec.decode_field("version")?;
-        let (count,         dec) = dec.read_varint("locator_count")?;
+        let (version, dec) = dec.decode_field("version")?;
+        let (count, dec) = dec.read_varint("locator_count")?;
         let mut dec = dec;
         let mut locator = Vec::with_capacity(count as usize);
         for _ in 0..count {
@@ -67,6 +67,10 @@ impl BitcoinMessage for GetHeaders {
         }
         let (stop, dec) = dec.read_array::<32>("stop_hash")?;
         dec.finish_unchecked();
-        Ok(Self { version, locator, stop_hash: BlockHash::from_bytes(stop) })
+        Ok(Self {
+            version,
+            locator,
+            stop_hash: BlockHash::from_bytes(stop),
+        })
     }
 }

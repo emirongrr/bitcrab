@@ -9,7 +9,7 @@
 //! operator<< for building scripts. We use a plain newtype —
 //! script building will be a separate concern.
 
-use super::constants::{ MAX_SCRIPT_SIZE};
+use super::constants::MAX_SCRIPT_SIZE;
 
 /// An opaque Bitcoin script — a sequence of bytes.
 ///

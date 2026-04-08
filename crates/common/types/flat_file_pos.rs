@@ -23,14 +23,13 @@ impl FlatFilePos {
 
 impl BitcoinEncode for FlatFilePos {
     fn encode(&self, enc: Encoder) -> Encoder {
-        enc.encode_field(&self.file)
-           .encode_field(&self.offset)
+        enc.encode_field(&self.file).encode_field(&self.offset)
     }
 }
 
 impl BitcoinDecode for FlatFilePos {
     fn decode(dec: Decoder) -> Result<(Self, Decoder), DecodeError> {
-        let (file,   dec) = dec.decode_field::<u32>("FlatFilePos::file")?;
+        let (file, dec) = dec.decode_field::<u32>("FlatFilePos::file")?;
         let (offset, dec) = dec.decode_field::<u32>("FlatFilePos::offset")?;
         Ok((FlatFilePos { file, offset }, dec))
     }

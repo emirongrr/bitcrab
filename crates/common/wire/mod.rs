@@ -6,5 +6,5 @@ pub mod encode;
 pub mod error;
 
 pub use decode::{BitcoinDecode, Decoder};
-pub use encode::{BitcoinEncode, Encoder, U16BE, VarInt, VarList, VarStr};
+pub use encode::{BitcoinEncode, Encoder, VarInt, VarList, VarStr, U16BE};
 pub use error::{DecodeError, EncodeError};

@@ -13,11 +13,7 @@
 //! | mutability     | `CMutableTransaction` + `CTransaction` | one struct |
 //! | serialization  | `SERIALIZE_METHODS` macro | explicit functions (later) |
 
-use super::{
-    amount::Amount,
-    hash::Txid,
-    script::ScriptBuf,
-};
+use super::{amount::Amount, hash::Txid, script::ScriptBuf};
 
 /// Reference to a specific unspent output (UTXO).
 ///
@@ -193,4 +189,3 @@ impl Transaction {
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
-

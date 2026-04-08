@@ -3,15 +3,19 @@
 //! Bitcoin Core: NetMsgType::PING / PONG in src/protocol.h
 //! Both carry a single u64 nonce. Pong echoes the ping nonce.
 
-use bitcrab_common::wire::{Decoder, Encoder, error::DecodeError};
-use crate::p2p::message::Command;
 use super::BitcoinMessage;
+use crate::p2p::message::Command;
+use bitcrab_common::wire::{error::DecodeError, Decoder, Encoder};
 
 #[derive(Debug, Clone)]
-pub struct Ping { pub nonce: u64 }
+pub struct Ping {
+    pub nonce: u64,
+}
 
 #[derive(Debug, Clone)]
-pub struct Pong { pub nonce: u64 }
+pub struct Pong {
+    pub nonce: u64,
+}
 
 impl BitcoinMessage for Ping {
     const COMMAND: Command = Command::Ping;

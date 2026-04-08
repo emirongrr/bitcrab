@@ -49,9 +49,9 @@ impl RpcResponse {
 pub async fn dispatch(req: RpcRequest, ctx: crate::context::RpcContext) -> RpcResponse {
     let id = req.id.clone();
     let result = match req.method.as_str() {
-        "getblockchaininfo"  => blockchain::get_blockchain_info(ctx).await,
-        "getnetworkinfo"     => network::get_network_info(ctx).await,
-        "getpeerinfo"        => network::get_peer_info(ctx).await,
+        "getblockchaininfo" => blockchain::get_blockchain_info(ctx).await,
+        "getnetworkinfo" => network::get_network_info(ctx).await,
+        "getpeerinfo" => network::get_peer_info(ctx).await,
         "getconnectioncount" => network::get_connection_count(ctx).await,
         _ => Err(RpcError {
             code: -32601,
@@ -69,4 +69,3 @@ pub async fn dispatch(req: RpcRequest, ctx: crate::context::RpcContext) -> RpcRe
         },
     }
 }
-

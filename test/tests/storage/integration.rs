@@ -2,9 +2,9 @@
 //!
 //! Tests combining multiple components: Handle, Worker, and BlockFiles.
 
-use bitcrab_storage::{Store, Magic};
 use bitcrab_common::types::block::{BlockHeader, BlockHeight};
 use bitcrab_common::types::hash::BlockHash;
+use bitcrab_storage::{Magic, Store};
 
 #[tokio::test]
 async fn storage_integration_basic_flow() {
@@ -24,27 +24,31 @@ async fn storage_integration_basic_flow() {
     let hash = header.block_hash();
 
     // 3. Store header (async)
-    store.store_header(header.clone(), BlockHeight(0), true)
+    store
+        .store_header(header.clone(), BlockHeight(0), true)
         .await
         .expect("failed to store header");
 
     // 4. Verify index retrieval (synchronous/concurrent)
-    let index = store.get_block_index(&hash)
+    let index = store
+        .get_block_index(&hash)
         .expect("failed to get index")
         .expect("block index missing");
-    
+
     assert_eq!(index.height, BlockHeight(0));
     assert_eq!(index.header.block_hash(), hash);
 
     // 5. Verify best block update
-    let best = store.get_best_block()
+    let best = store
+        .get_best_block()
         .expect("failed to get best block")
         .expect("best block missing");
     assert_eq!(best, hash);
 
     // 6. Store full block (async)
     let raw_block = vec![0xAA; 100]; // Mock raw block data
-    let pos = store.store_block(header, BlockHeight(0), raw_block.clone())
+    let pos = store
+        .store_block(header, BlockHeight(0), raw_block.clone())
         .await
         .expect("failed to store block");
 
@@ -52,7 +56,8 @@ async fn storage_integration_basic_flow() {
     // Offset should be 8 (magic + size header)
 
     // 7. Read block back (direct concurrent read)
-    let read_back = store.get_block(&hash)
+    let read_back = store
+        .get_block(&hash)
         .expect("failed to get block")
         .expect("block data missing");
 

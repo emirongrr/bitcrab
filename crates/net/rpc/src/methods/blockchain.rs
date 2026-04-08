@@ -1,7 +1,7 @@
-use serde::Serialize;
-use serde_json::{json, Value};
 use crate::context::RpcContext;
 use crate::methods::RpcError;
+use serde::Serialize;
+use serde_json::{json, Value};
 
 /// Response for getblockchaininfo
 /// Fields must match Bitcoin Core precisely for test compatibility.
@@ -21,12 +21,22 @@ pub struct GetBlockchainInfoResponse {
 }
 
 pub async fn get_blockchain_info(ctx: RpcContext) -> Result<Value, RpcError> {
-    let tip_hash = ctx.store.get_best_block()
-        .map_err(|e| RpcError { code: -1, message: e.to_string() })?
+    let tip_hash = ctx
+        .store
+        .get_best_block()
+        .map_err(|e| RpcError {
+            code: -1,
+            message: e.to_string(),
+        })?
         .unwrap_or_else(|| bitcrab_common::types::hash::BlockHash::zero());
 
-    let tip_index = ctx.store.get_block_index(&tip_hash)
-        .map_err(|e| RpcError { code: -1, message: e.to_string() })?
+    let tip_index = ctx
+        .store
+        .get_block_index(&tip_hash)
+        .map_err(|e| RpcError {
+            code: -1,
+            message: e.to_string(),
+        })?
         .unwrap_or_else(|| {
             // Fallback for genesis if not indexed yet
             bitcrab_common::types::block::BlockIndex {

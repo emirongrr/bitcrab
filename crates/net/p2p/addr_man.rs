@@ -4,18 +4,17 @@
 //! - New Table: 1024 buckets, filled from gossip/DNS.
 //! - Tried Table: 64 buckets, filled only after successful handshakes.
 
+use crate::p2p::messages::addr::NetAddr;
+use rand::Rng;
+use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
     hash::{Hash, Hasher},
     net::{IpAddr, SocketAddr},
     time::{Duration, Instant},
 };
-use tracing::{debug, info};
-use serde::{Deserialize, Serialize};
 use std::{fs, path::Path};
-use rand::Rng;
-use crate::p2p::messages::addr::NetAddr;
-
+use tracing::{debug, info};
 
 const ADDRMAN_NEW_BUCKET_COUNT: usize = 1024;
 const ADDRMAN_TRIED_BUCKET_COUNT: usize = 64;
@@ -24,7 +23,7 @@ const ADDRMAN_BUCKET_SIZE: usize = 64;
 const MAX_SCORE: i32 = 100;
 const MIN_SCORE: i32 = -10;
 const BAN_DURATION: Duration = Duration::from_secs(60 * 10); // 10 min
-const RETRY_INTERVAL: Duration = Duration::from_secs(60 * 2);  // 2 min
+const RETRY_INTERVAL: Duration = Duration::from_secs(60 * 2); // 2 min
 
 /// Serializable snapshot for `peers.dat` persistence using bincode
 #[derive(Serialize, Deserialize)]
@@ -96,14 +95,16 @@ impl AddrInfo {
         };
 
         NetAddr {
-            time: self.last_connected.map(|t| t.elapsed().as_secs() as u32).unwrap_or(0),
+            time: self
+                .last_connected
+                .map(|t| t.elapsed().as_secs() as u32)
+                .unwrap_or(0),
             services: 1, // Default to NODE_NETWORK, in production this should be stored or queried
             ip: ip_bytes,
             port: self.addr.port(),
         }
     }
 }
-
 
 pub struct AddrMan {
     pub map_info: HashMap<SocketAddr, AddrInfo>,
@@ -126,7 +127,8 @@ impl AddrMan {
     }
 
     pub fn save(&self, path: &Path) -> std::io::Result<()> {
-        let entries: Vec<PersistedAddrInfo> = self.map_info
+        let entries: Vec<PersistedAddrInfo> = self
+            .map_info
             .values()
             .map(|e| PersistedAddrInfo {
                 addr: e.addr.to_string(),
@@ -179,11 +181,18 @@ impl AddrMan {
                         }
                     }
                 }
-                info!("Loaded AddrMan table from {} ({} entries)", path.display(), man.map_info.len());
+                info!(
+                    "Loaded AddrMan table from {} ({} entries)",
+                    path.display(),
+                    man.map_info.len()
+                );
                 return man;
             }
         }
-        debug!("No AddrMan table found or corrupted at {}, starting fresh", path.display());
+        debug!(
+            "No AddrMan table found or corrupted at {}, starting fresh",
+            path.display()
+        );
         Self::new()
     }
 
@@ -195,7 +204,12 @@ impl AddrMan {
             }
             IpAddr::V6(ipv6) => {
                 let segments = ipv6.segments();
-                vec![(segments[0] >> 8) as u8, (segments[0] & 0xff) as u8, (segments[1] >> 8) as u8, (segments[1] & 0xff) as u8] // /32 prefix for IPv6
+                vec![
+                    (segments[0] >> 8) as u8,
+                    (segments[0] & 0xff) as u8,
+                    (segments[1] >> 8) as u8,
+                    (segments[1] & 0xff) as u8,
+                ] // /32 prefix for IPv6
             }
         }
     }
@@ -263,7 +277,7 @@ impl AddrMan {
         let tried_bucket_id = self.get_tried_bucket(&addr);
         if self.tried_buckets[tried_bucket_id].len() >= ADDRMAN_BUCKET_SIZE {
             let victim = self.tried_buckets[tried_bucket_id].remove(0);
-            
+
             let v_source = {
                 if let Some(v_info) = self.map_info.get_mut(&victim) {
                     v_info.is_tried = false;
@@ -311,7 +325,8 @@ impl AddrMan {
 
     pub fn select_best_ipv4(&self, active: &[SocketAddr]) -> Option<SocketAddr> {
         let active_set: HashSet<_> = active.iter().collect();
-        self.map_info.values()
+        self.map_info
+            .values()
             .filter(|e| e.is_connectable() && e.addr.is_ipv4() && !active_set.contains(&e.addr))
             .max_by_key(|e| (e.is_tried, e.score, e.success_count))
             .map(|e| e.addr)
@@ -319,7 +334,8 @@ impl AddrMan {
 
     pub fn select_best(&self, active: &[SocketAddr]) -> Option<SocketAddr> {
         let active_set: HashSet<_> = active.iter().collect();
-        self.map_info.values()
+        self.map_info
+            .values()
             .filter(|e| e.is_connectable() && !active_set.contains(&e.addr))
             .max_by_key(|e| (e.is_tried, e.score, e.success_count))
             .map(|e| e.addr)
@@ -330,14 +346,19 @@ impl AddrMan {
     }
 
     pub fn connectable_count(&self) -> usize {
-        self.map_info.values().filter(|e| e.is_connectable()).count()
+        self.map_info
+            .values()
+            .filter(|e| e.is_connectable())
+            .count()
     }
 
     /// Returns a random sample of known addresses for `addr` responses.
     /// Max count recommended by Bitcoin protocol is 1000.
     pub fn get_random_sample(&self, count: usize) -> Vec<NetAddr> {
         let mut rng = rand::thread_rng();
-        let all_connectable: Vec<_> = self.map_info.values()
+        let all_connectable: Vec<_> = self
+            .map_info
+            .values()
             .filter(|e| e.is_connectable())
             .collect();
 
@@ -347,17 +368,18 @@ impl AddrMan {
 
         let sample_size = count.min(all_connectable.len());
         let mut indices: Vec<usize> = (0..all_connectable.len()).collect();
-        
+
         // Simple shuffle and take
         use rand::seq::SliceRandom;
         indices.shuffle(&mut rng);
 
-        indices.iter().take(sample_size)
+        indices
+            .iter()
+            .take(sample_size)
             .map(|&i| all_connectable[i].to_net_addr())
             .collect()
     }
 }
-
 
 impl Default for AddrMan {
     fn default() -> Self {

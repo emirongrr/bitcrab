@@ -6,7 +6,6 @@ use thiserror::Error;
 /// Consensus and validation errors belong in `bitcrab-node`.
 #[derive(Debug, Error)]
 pub enum StoreError {
-
     // ── Backend ───────────────────────────────────────────────────────────────
     #[error("wire decode error: {0}")]
     WireDecode(#[from] bitcrab_common::wire::DecodeError),
@@ -27,7 +26,6 @@ pub enum StoreError {
     LockPoisoned,
 
     // ── Serialization ─────────────────────────────────────────────────────────
-
     /// Failed to decode a value retrieved from the database or a block file.
     ///
     /// Indicates corrupt data or a schema mismatch between writer and reader.
@@ -39,7 +37,6 @@ pub enum StoreError {
     Encode(String),
 
     // ── Chain state ───────────────────────────────────────────────────────────
-
     /// The best-block pointer has not been written to the UTXO table yet.
     ///
     /// Returned on first startup before genesis is stored.
@@ -61,7 +58,6 @@ pub enum StoreError {
     BlockFileUnavailable { file: u32, offset: u32 },
 
     // ── Schema versioning ─────────────────────────────────────────────────────
-
     /// The on-disk schema version does not match the compiled-in version.
     ///
     /// A re-index is required after upgrading the node binary.

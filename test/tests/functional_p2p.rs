@@ -5,23 +5,26 @@
 //! and Sybil resistance.
 
 use bitcrab_net::p2p::{
+    addr_man::AddrMan,
     codec::{decode_header, encode_header},
     message::Magic,
     messages::{
         ping::{Ping, Pong},
-        version::Version,
         verack::Verack,
-        Message,
-        BitcoinMessage,
+        version::Version,
+        BitcoinMessage, Message,
     },
     peer_manager::PeerManager,
     peer_table::PeerTable,
-    addr_man::AddrMan,
 };
 use std::{net::SocketAddr, sync::Arc, time::Duration};
-use tracing::{info, debug};
+use tracing::{debug, info};
 
-use tokio::{net::{TcpListener, TcpStream}, io::{AsyncReadExt, AsyncWriteExt}, time::timeout};
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::{TcpListener, TcpStream},
+    time::timeout,
+};
 
 /// Mimics the behavior of `test_framework/p2p.py` `P2PConnection`
 struct TestNode {
@@ -38,7 +41,11 @@ impl TestNode {
     async fn send_msg<M: BitcoinMessage>(&mut self, msg: &M) {
         let payload = msg.encode();
         let header = encode_header(self.magic, &M::COMMAND, &payload);
-        debug!("Client: Sending {} message, header: {:02X?}", M::COMMAND, header);
+        debug!(
+            "Client: Sending {} message, header: {:02X?}",
+            M::COMMAND,
+            header
+        );
         self.stream.write_all(&header).await.unwrap();
         self.stream.write_all(&payload).await.unwrap();
     }
@@ -75,11 +82,16 @@ async fn test_ping_pong_compliance() {
     let pm_clone = Arc::clone(&pm);
     let server_task = tokio::spawn(async move {
         debug!("Server: Waiting for connection on {}", addr);
-        let (stream, peer_addr) = listener.accept().await.expect("Test server failed to accept");
-        
+        let (stream, peer_addr) = listener
+            .accept()
+            .await
+            .expect("Test server failed to accept");
+
         info!("Server: Accepted connection from {}", peer_addr);
         // Initiate handshake process on the incoming connection
-        let (peer, mut rx) = pm_clone.handshake(stream, peer_addr, true).await
+        let (peer, mut rx) = pm_clone
+            .handshake(stream, peer_addr, true)
+            .await
             .expect("Test server handshake failed");
 
         info!("Server: Handshake complete for {}", peer_addr);
@@ -87,8 +99,12 @@ async fn test_ping_pong_compliance() {
         loop {
             match rx.recv().await {
                 Some(Message::Ping(ping)) => {
-                    debug!("Server: Received Ping(nonce={:X}), sending Pong", ping.nonce);
-                    peer.send(Message::Pong(Pong { nonce: ping.nonce })).await
+                    debug!(
+                        "Server: Received Ping(nonce={:X}), sending Pong",
+                        ping.nonce
+                    );
+                    peer.send(Message::Pong(Pong { nonce: ping.nonce }))
+                        .await
                         .expect("Test server failed to send Pong");
                 }
                 None => {
@@ -137,34 +153,47 @@ async fn test_ping_pong_compliance() {
                 m => debug!("Client: Received other message during ping-pong: {:?}", m),
             }
         }
-    }).await.expect("Timeout waiting for Pong");
+    })
+    .await
+    .expect("Timeout waiting for Pong");
     assert_eq!(pong_nonce, test_nonce, "Pong nonce must echo Ping nonce");
 
     // NEW: Verify GetAddr gossip flow
     info!("Client: Sending GetAddr");
-    test_node.send_msg(&crate::p2p::messages::addr::GetAddr).await;
+    test_node
+        .send_msg(&crate::p2p::messages::addr::GetAddr)
+        .await;
 
     let addr_count = timeout(Duration::from_secs(5), async {
         loop {
             match test_node.recv_msg().await {
                 Message::Addr(addr) => {
-                    info!("Client: Received Addr message with {} peers", addr.addresses.len());
+                    info!(
+                        "Client: Received Addr message with {} peers",
+                        addr.addresses.len()
+                    );
                     return addr.addresses.len();
                 }
                 m => debug!("Client: Received other message during gossip test: {:?}", m),
             }
         }
-    }).await.expect("Timeout waiting for Addr response");
-    
-    // In this test, AddrMan is empty, so we expect 0, but receiving the message 
-    // proves the GetAddr -> PeerTable -> Addr loop is working.
-    info!("Client: Addr message received successfully (count: {})", addr_count);
+    })
+    .await
+    .expect("Timeout waiting for Addr response");
 
+    // In this test, AddrMan is empty, so we expect 0, but receiving the message
+    // proves the GetAddr -> PeerTable -> Addr loop is working.
+    info!(
+        "Client: Addr message received successfully (count: {})",
+        addr_count
+    );
 
     info!("Client: Dropping connection to trigger graceful server shutdown");
     drop(test_node);
-    
+
     // CRITICAL: Ensure the background task didn't crash or panic
-    server_task.await.expect("Background server task panicked or failed");
+    server_task
+        .await
+        .expect("Background server task panicked or failed");
     info!("--- test_ping_pong_compliance finished successfully ---");
 }

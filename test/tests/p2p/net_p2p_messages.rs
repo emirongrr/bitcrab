@@ -1,6 +1,10 @@
 //! Bitcoin P2P wire protocol — message-specific integration tests.
 
-use bitcrab_net::p2p::messages::{version::Version, ping::{Ping, Pong}, BitcoinMessage};
+use bitcrab_net::p2p::messages::{
+    ping::{Ping, Pong},
+    version::Version,
+    BitcoinMessage,
+};
 
 // -----------------------------------------------------------------------
 // Version Message Tests
@@ -18,7 +22,7 @@ fn version_payload_decode_known_vector() {
     // recv_services
     payload.extend_from_slice(&0u64.to_le_bytes());
     // recv_addr
-    payload.extend_from_slice(&[0,0,0,0, 0,0,0,0, 0,0, 0xFF,0xFF, 127,0,0,1]);
+    payload.extend_from_slice(&[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xFF, 0xFF, 127, 0, 0, 1]);
     // recv_port = 8333
     payload.extend_from_slice(&8333u16.to_be_bytes());
     // from_services
@@ -39,19 +43,19 @@ fn version_payload_decode_known_vector() {
     payload.push(1u8);
 
     let v = Version::decode(&payload).unwrap();
-    assert_eq!(v.version,      70015);
-    assert_eq!(v.user_agent,   "/bitcrab:0.1.0/");
+    assert_eq!(v.version, 70015);
+    assert_eq!(v.user_agent, "/bitcrab:0.1.0/");
     assert_eq!(v.start_height, 297000);
 }
 
 #[test]
 fn version_roundtrip() {
     let original = Version::our_version();
-    let encoded  = original.encode();
-    let decoded  = Version::decode(&encoded).unwrap();
+    let encoded = original.encode();
+    let decoded = Version::decode(&encoded).unwrap();
 
-    assert_eq!(decoded.version,      original.version);
-    assert_eq!(decoded.user_agent,   original.user_agent);
+    assert_eq!(decoded.version, original.version);
+    assert_eq!(decoded.user_agent, original.user_agent);
     assert_eq!(decoded.start_height, original.start_height);
 }
 
@@ -61,7 +65,9 @@ fn version_roundtrip() {
 
 #[test]
 fn ping_payload_is_8_bytes() {
-    let ping = Ping { nonce: 0x0102030405060708 };
+    let ping = Ping {
+        nonce: 0x0102030405060708,
+    };
     let encoded = ping.encode();
     assert_eq!(encoded.len(), 8);
     assert_eq!(encoded, [0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01]);
@@ -70,13 +76,15 @@ fn ping_payload_is_8_bytes() {
 #[test]
 fn pong_echoes_ping_nonce() {
     let nonce = 0xDEAD_BEEF_CAFE_BABEu64;
-    let ping    = Ping { nonce };
+    let ping = Ping { nonce };
     let encoded = ping.encode();
 
     let decoded_ping = Ping::decode(&encoded).unwrap();
     assert_eq!(decoded_ping.nonce, nonce);
 
-    let pong    = Pong { nonce: decoded_ping.nonce };
+    let pong = Pong {
+        nonce: decoded_ping.nonce,
+    };
     let pong_encoded = pong.encode();
     let decoded_pong = Pong::decode(&pong_encoded).unwrap();
     assert_eq!(decoded_pong.nonce, nonce);

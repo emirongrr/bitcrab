@@ -2,11 +2,11 @@
 //!
 //! Bitcoin Core: CMessageHeader in src/protocol.h
 
-use bitcrab_common::types::hash::hash256;
 use super::{
     errors::P2pError,
     message::{Command, Magic, MessageHeader},
 };
+use bitcrab_common::types::hash::hash256;
 
 use bitcrab_common::constants::MAX_MESSAGE_SIZE;
 
@@ -37,25 +37,33 @@ pub fn decode_header(buf: &[u8; 24], expected_magic: Magic) -> Result<MessageHea
     let magic_bytes: [u8; 4] = buf[0..4].try_into().unwrap();
     let magic = Magic::from_bytes(magic_bytes).ok_or(P2pError::WrongMagic {
         expected: u32::from_le_bytes(expected_magic.to_bytes()),
-        actual:   u32::from_le_bytes(magic_bytes),
+        actual: u32::from_le_bytes(magic_bytes),
     })?;
 
     if magic != expected_magic {
         return Err(P2pError::WrongMagic {
             expected: u32::from_le_bytes(expected_magic.to_bytes()),
-            actual:   u32::from_le_bytes(magic_bytes),
+            actual: u32::from_le_bytes(magic_bytes),
         });
     }
 
     let command = Command::from_wire(&buf[4..16].try_into().unwrap());
-    let length  = u32::from_le_bytes(buf[16..20].try_into().unwrap());
+    let length = u32::from_le_bytes(buf[16..20].try_into().unwrap());
 
     if (length as usize) > MAX_MESSAGE_SIZE {
-        return Err(P2pError::MessageTooLarge { size: length, limit: MAX_MESSAGE_SIZE });
+        return Err(P2pError::MessageTooLarge {
+            size: length,
+            limit: MAX_MESSAGE_SIZE,
+        });
     }
 
     let checksum: [u8; 4] = buf[20..24].try_into().unwrap();
-    Ok(MessageHeader { magic, command, length, checksum })
+    Ok(MessageHeader {
+        magic,
+        command,
+        length,
+        checksum,
+    })
 }
 
 /// Verify payload matches header checksum.
@@ -64,9 +72,8 @@ pub fn verify_checksum(header: &MessageHeader, payload: &[u8]) -> Result<(), P2p
     if actual != header.checksum {
         return Err(P2pError::ChecksumMismatch {
             expected: u32::from_be_bytes(header.checksum),
-            actual:   u32::from_be_bytes(actual),
+            actual: u32::from_be_bytes(actual),
         });
     }
     Ok(())
 }
-

@@ -82,7 +82,7 @@ impl SyncManager {
                 // Penalize peers that timed out
                 for (hash, peer) in to_remove {
                     info!("Penalizing peer {} for timeout on block request", peer);
-                    
+
                     // Simple peer misbehavior punishment: Ban for 1 hr
                     peer_manager.ban(peer.ip(), Duration::from_secs(3600));
 
@@ -94,7 +94,10 @@ impl SyncManager {
 
     /// Register that we requested a block from a specific peer
     pub fn register_in_flight(&self, hash: [u8; 32], peer: SocketAddr) {
-        self.in_flight.lock().unwrap().insert(hash, (peer, Instant::now()));
+        self.in_flight
+            .lock()
+            .unwrap()
+            .insert(hash, (peer, Instant::now()));
     }
 
     /// Mark a block as received (fulfilled)

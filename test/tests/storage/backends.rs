@@ -15,4 +15,3 @@ fn in_memory_backend_basic_operations() {
     let _backend = InMemoryBackend::open().unwrap();
     // Just verify backend initializes
 }
-

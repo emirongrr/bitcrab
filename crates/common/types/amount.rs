@@ -97,4 +97,3 @@ pub enum AmountError {
     #[error("arithmetic overflow computing amount")]
     Overflow,
 }
-

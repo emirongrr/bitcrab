@@ -1,7 +1,7 @@
 //! Core Actor traits and types for bitcrab-net.
 
-use tokio::sync::{mpsc, oneshot};
 use thiserror::Error;
+use tokio::sync::{mpsc, oneshot};
 
 #[derive(Error, Debug)]
 pub enum ActorError {
@@ -20,7 +20,9 @@ pub struct ActorRef<M> {
 
 impl<M> Clone for ActorRef<M> {
     fn clone(&self) -> Self {
-        Self { tx: self.tx.clone() }
+        Self {
+            tx: self.tx.clone(),
+        }
     }
 }
 
@@ -36,13 +38,16 @@ impl<M> ActorRef<M> {
 
     /// Send a message and wait for a response using a oneshot channel.
     /// Used for "calls" that return data.
-    pub async fn call<F, R>(&self, f: F) -> Result<R, ActorError> 
-    where 
+    pub async fn call<F, R>(&self, f: F) -> Result<R, ActorError>
+    where
         F: FnOnce(oneshot::Sender<R>) -> M,
     {
         let (tx, rx) = oneshot::channel();
         let msg = f(tx);
-        self.tx.send(msg).await.map_err(|_| ActorError::Terminated)?;
+        self.tx
+            .send(msg)
+            .await
+            .map_err(|_| ActorError::Terminated)?;
         rx.await.map_err(|_| ActorError::Dropped)
     }
 }

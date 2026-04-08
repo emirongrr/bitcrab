@@ -104,5 +104,8 @@ fn promotion_to_tried_table() {
     table.add(addr(8333), source());
     assert!(!table.map_info[&addr(8333)].is_tried);
     table.record_success(addr(8333));
-    assert!(table.map_info[&addr(8333)].is_tried, "should be promoted to Tried");
+    assert!(
+        table.map_info[&addr(8333)].is_tried,
+        "should be promoted to Tried"
+    );
 }

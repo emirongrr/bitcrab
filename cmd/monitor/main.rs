@@ -1,7 +1,3 @@
-use std::{
-    io,
-    time::{Duration, Instant},
-};
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
     execute,
@@ -10,11 +6,15 @@ use crossterm::{
 use ratatui::{
     backend::{Backend, CrosstermBackend},
     layout::{Constraint, Direction, Layout},
-    widgets::{Block, Borders, Paragraph, Row, Table, List, ListItem},
     style::{Color, Modifier, Style},
+    widgets::{Block, Borders, List, ListItem, Paragraph, Row, Table},
     Frame, Terminal,
 };
 use serde_json::Value;
+use std::{
+    io,
+    time::{Duration, Instant},
+};
 
 struct App {
     rpc_url: String,
@@ -39,43 +39,55 @@ impl App {
         let client = reqwest::Client::new();
 
         // 1. Fetch blockchain info
-        let bc_res = client.post(&self.rpc_url)
+        let bc_res = client
+            .post(&self.rpc_url)
             .json(&serde_json::json!({
                 "jsonrpc": "1.0",
                 "id": "monitor",
                 "method": "getblockchaininfo",
                 "params": []
             }))
-            .send().await?.json::<Value>().await?;
-        
+            .send()
+            .await?
+            .json::<Value>()
+            .await?;
+
         if let Some(res) = bc_res.get("result") {
             self.blockchain_info = Some(res.clone());
         }
 
         // 2. Fetch network info
-        let net_res = client.post(&self.rpc_url)
+        let net_res = client
+            .post(&self.rpc_url)
             .json(&serde_json::json!({
                 "jsonrpc": "1.0",
                 "id": "monitor",
                 "method": "getnetworkinfo",
                 "params": []
             }))
-            .send().await?.json::<Value>().await?;
-        
+            .send()
+            .await?
+            .json::<Value>()
+            .await?;
+
         if let Some(res) = net_res.get("result") {
             self.network_info = Some(res.clone());
         }
 
         // 3. Fetch peers
-        let peer_res = client.post(&self.rpc_url)
+        let peer_res = client
+            .post(&self.rpc_url)
             .json(&serde_json::json!({
                 "jsonrpc": "1.0",
                 "id": "monitor",
                 "method": "getpeerinfo",
                 "params": []
             }))
-            .send().await?.json::<Value>().await?;
-        
+            .send()
+            .await?
+            .json::<Value>()
+            .await?;
+
         if let Some(res) = peer_res.get("result") {
             if let Some(list) = res.as_array() {
                 self.peers = list.clone();
@@ -163,27 +175,42 @@ fn ui(f: &mut Frame, app: &App) {
         .split(f.size());
 
     // 1. Header
-    let subver = app.network_info.as_ref()
+    let subver = app
+        .network_info
+        .as_ref()
         .and_then(|i| i.get("subversion"))
         .and_then(|v| v.as_str())
         .unwrap_or("bitcrab");
 
-    let header = Paragraph::new(format!(" Bitcrab Node Monitor | Version: {} | Last Update: {} | Press 'q' to quit", subver, app.last_update))
-        .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::Cyan)));
+    let header = Paragraph::new(format!(
+        " Bitcrab Node Monitor | Version: {} | Last Update: {} | Press 'q' to quit",
+        subver, app.last_update
+    ))
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Cyan)),
+    );
     f.render_widget(header, chunks[0]);
 
     // 2. Stats
-    let height = app.blockchain_info.as_ref()
+    let height = app
+        .blockchain_info
+        .as_ref()
         .and_then(|i| i.get("blocks"))
         .map(|v| v.to_string())
         .unwrap_or_else(|| "0".to_string());
-    
-    let best_hash = app.blockchain_info.as_ref()
+
+    let best_hash = app
+        .blockchain_info
+        .as_ref()
         .and_then(|i| i.get("bestblockhash"))
         .and_then(|v| v.as_str())
         .unwrap_or("unknown");
 
-    let network = app.blockchain_info.as_ref()
+    let network = app
+        .blockchain_info
+        .as_ref()
         .and_then(|i| i.get("chain"))
         .and_then(|v| v.as_str())
         .unwrap_or("unknown");
@@ -196,35 +223,46 @@ fn ui(f: &mut Frame, app: &App) {
         format!(" Connections: {}", conn_count),
         format!(" Best Block : {}", best_hash),
     ];
-    
+
     let stats_list: Vec<ListItem> = stats_text
         .iter()
         .map(|s| ListItem::new(s.as_str()))
         .collect();
 
-    let stats = List::new(stats_list)
-        .block(Block::default().title(" Node Info ").borders(Borders::ALL));
+    let stats =
+        List::new(stats_list).block(Block::default().title(" Node Info ").borders(Borders::ALL));
     f.render_widget(stats, chunks[1]);
 
     // 3. Peers
-    let rows: Vec<Row> = app.peers.iter().map(|p| {
-        let conntime = p.get("conntime").and_then(|v| v.as_u64()).unwrap_or(0);
-        let conntime_fmt = if conntime > 3600 {
-            format!("{}h {}m", conntime / 3600, (conntime % 3600) / 60)
-        } else if conntime > 60 {
-            format!("{}m {}s", conntime / 60, conntime % 60)
-        } else {
-            format!("{}s", conntime)
-        };
+    let rows: Vec<Row> = app
+        .peers
+        .iter()
+        .map(|p| {
+            let conntime = p.get("conntime").and_then(|v| v.as_u64()).unwrap_or(0);
+            let conntime_fmt = if conntime > 3600 {
+                format!("{}h {}m", conntime / 3600, (conntime % 3600) / 60)
+            } else if conntime > 60 {
+                format!("{}m {}s", conntime / 60, conntime % 60)
+            } else {
+                format!("{}s", conntime)
+            };
 
-        Row::new(vec![
-            p.get("addr").and_then(|v| v.as_str()).unwrap_or("?").to_string(),
-            p.get("subver").and_then(|v| v.as_str()).unwrap_or("?").to_string(),
-            p.get("startingheight").map(|v| v.to_string()).unwrap_or_else(|| "?".to_string()),
-            conntime_fmt,
-        ])
-    }).collect();
-
+            Row::new(vec![
+                p.get("addr")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("?")
+                    .to_string(),
+                p.get("subver")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("?")
+                    .to_string(),
+                p.get("startingheight")
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "?".to_string()),
+                conntime_fmt,
+            ])
+        })
+        .collect();
 
     let table = Table::new(
         rows,
@@ -233,13 +271,20 @@ fn ui(f: &mut Frame, app: &App) {
             Constraint::Percentage(35),
             Constraint::Percentage(20),
             Constraint::Percentage(20),
-        ]
+        ],
     )
     .header(
-        Row::new(vec!["Address", "User Agent", "Height", "Uptime"])
-            .style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
+        Row::new(vec!["Address", "User Agent", "Height", "Uptime"]).style(
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
     )
-    .block(Block::default().title(" Connected Peers ").borders(Borders::ALL));
+    .block(
+        Block::default()
+            .title(" Connected Peers ")
+            .borders(Borders::ALL),
+    );
 
     f.render_widget(table, chunks[2]);
 }

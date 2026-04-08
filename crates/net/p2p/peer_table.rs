@@ -2,19 +2,17 @@
 //! Replaces the old PeerManager with an actor-based registry.
 
 use std::collections::HashMap;
-use std::net::{SocketAddr, IpAddr};
+use std::net::{IpAddr, SocketAddr};
 use tokio::sync::{mpsc, oneshot};
-use tokio::time::{Instant, Duration};
-use tracing::{info, debug, warn};
+use tokio::time::{Duration, Instant};
+use tracing::{debug, info, warn};
 
 use super::{
-    peer::PeerHandle,
+    actor::{ActorError, ActorRef},
     addr_man::AddrMan,
-    actor::{ActorRef, ActorError},
     messages::addr::NetAddr,
+    peer::PeerHandle,
 };
-
-
 
 /// Messages handled by the PeerTableActor.
 pub enum PeerTableMessage {
@@ -39,9 +37,6 @@ pub enum PeerTableMessage {
     /// Get all active peer handles.
     GetPeers(oneshot::Sender<Vec<PeerHandle>>),
 }
-
-
-
 
 /// The internal state of the PeerTable.
 struct PeerTableActor {
@@ -83,7 +78,9 @@ impl PeerTableActor {
                 }
                 PeerTableMessage::GetBestPeer(tx) => {
                     // Selection logic: prioritize peers with low misbehavior and high success
-                    let best = self.peers.values()
+                    let best = self
+                        .peers
+                        .values()
                         .find(|p| !self.ban_list.contains_key(&p.addr.ip()))
                         .cloned();
                     let _ = tx.send(best);
@@ -96,7 +93,11 @@ impl PeerTableActor {
                     let _ = tx.send(sample);
                 }
                 PeerTableMessage::AddAddresses(addresses, source) => {
-                    debug!("[table] adding {} addresses from {}", addresses.len(), source);
+                    debug!(
+                        "[table] adding {} addresses from {}",
+                        addresses.len(),
+                        source
+                    );
                     for addr in addresses {
                         self.addr_man.add(addr.to_socket_addr(), source);
                     }
@@ -106,21 +107,19 @@ impl PeerTableActor {
                     let _ = tx.send(all_peers);
                 }
             }
-
-
         }
     }
 
     async fn ban_peer(&mut self, addr: SocketAddr) {
         warn!("[table] banning IP {} (Socket: {})", addr.ip(), addr);
-        self.ban_list.insert(addr.ip(), Instant::now() + Duration::from_secs(86400));
+        self.ban_list
+            .insert(addr.ip(), Instant::now() + Duration::from_secs(86400));
         if let Some(peer) = self.peers.remove(&addr) {
             let _ = peer.disconnect().await;
         }
         self.addr_man.record_failure(addr);
     }
 }
-
 
 /// A handle to the PeerTableActor.
 #[derive(Clone)]
@@ -130,7 +129,6 @@ pub struct PeerTable {
 
 impl PeerTable {
     pub fn new(addr_man: AddrMan) -> Self {
-
         let (tx, rx) = mpsc::channel(1024);
         let actor = PeerTableActor {
             peers: HashMap::new(),
@@ -144,8 +142,8 @@ impl PeerTable {
             actor.run().await;
         });
 
-        Self { 
-            actor: ActorRef::new(tx) 
+        Self {
+            actor: ActorRef::new(tx),
         }
     }
 
@@ -157,35 +155,47 @@ impl PeerTable {
         self.actor.cast(PeerTableMessage::AddPeer(handle)).await
     }
 
-
     pub async fn get_peer_count(&self) -> Result<usize, ActorError> {
-        self.actor.call(|tx| PeerTableMessage::GetPeerCount(tx)).await
+        self.actor
+            .call(|tx| PeerTableMessage::GetPeerCount(tx))
+            .await
     }
-    
+
     pub async fn get_best_peer(&self) -> Result<Option<PeerHandle>, ActorError> {
-        self.actor.call(|tx| PeerTableMessage::GetBestPeer(tx)).await
+        self.actor
+            .call(|tx| PeerTableMessage::GetBestPeer(tx))
+            .await
     }
 
     pub async fn record_misbehavior(&self, addr: SocketAddr, score: i32) -> Result<(), ActorError> {
-        self.actor.cast(PeerTableMessage::RecordMisbehavior(addr, score)).await
+        self.actor
+            .cast(PeerTableMessage::RecordMisbehavior(addr, score))
+            .await
     }
 
     pub async fn record_critical_failure(&self, addr: SocketAddr) -> Result<(), ActorError> {
-        self.actor.cast(PeerTableMessage::RecordCriticalFailure(addr)).await
+        self.actor
+            .cast(PeerTableMessage::RecordCriticalFailure(addr))
+            .await
     }
 
     pub async fn get_addresses(&self) -> Result<Vec<NetAddr>, ActorError> {
-        self.actor.call(|tx| PeerTableMessage::GetAddresses(tx)).await
+        self.actor
+            .call(|tx| PeerTableMessage::GetAddresses(tx))
+            .await
     }
 
-    pub async fn add_addresses(&self, addrs: Vec<NetAddr>, source: SocketAddr) -> Result<(), ActorError> {
-        self.actor.cast(PeerTableMessage::AddAddresses(addrs, source)).await
+    pub async fn add_addresses(
+        &self,
+        addrs: Vec<NetAddr>,
+        source: SocketAddr,
+    ) -> Result<(), ActorError> {
+        self.actor
+            .cast(PeerTableMessage::AddAddresses(addrs, source))
+            .await
     }
 
     pub async fn get_peers(&self) -> Result<Vec<PeerHandle>, ActorError> {
         self.actor.call(|tx| PeerTableMessage::GetPeers(tx)).await
     }
 }
-
-
-

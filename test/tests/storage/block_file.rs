@@ -3,11 +3,9 @@
 //! Tests for `FlatFilePos`, `BlockFileInfo`, and `BlockFileManager`.
 //! These tests verify the flat-file format matches Bitcoin Core exactly.
 
-use bitcrab_storage::block_file::{
-    BlockFileInfo, BlockFileManager, FlatFilePos, Magic,
-};
+use bitcrab_common::wire::decode::{BitcoinDecode, Decoder};
 use bitcrab_common::wire::encode::Encoder;
-use bitcrab_common::wire::decode::{Decoder, BitcoinDecode};
+use bitcrab_storage::block_file::{BlockFileInfo, BlockFileManager, FlatFilePos, Magic};
 use std::fs;
 use std::path::PathBuf;
 
@@ -127,7 +125,11 @@ fn write_and_read_block_roundtrip() {
 
     // File is written to blocks/ subdirectory
     let file_path = dir.join("blocks").join("blk00000.dat");
-    assert!(file_path.exists(), "Block file should exist at {:?}", file_path);
+    assert!(
+        file_path.exists(),
+        "Block file should exist at {:?}",
+        file_path
+    );
 
     let back = mgr.read_block(pos).unwrap();
     assert_eq!(back, block);
@@ -213,12 +215,15 @@ fn file_rotates_at_max_size() {
     let mut mgr = BlockFileManager::new(&dir, Magic::Regtest, 0).unwrap();
 
     // Ensure first file exists by writing a small block
-    mgr.write_block(b"init").expect("Failed to write init block");
+    mgr.write_block(b"init")
+        .expect("Failed to write init block");
 
     // Now simulate being near the limit
     mgr.current_size = bitcrab_common::constants::MAX_BLOCK_FILE_SIZE - 10;
 
-    let pos = mgr.write_block(&vec![0u8; 100]).expect("Failed to write block");
+    let pos = mgr
+        .write_block(&vec![0u8; 100])
+        .expect("Failed to write block");
     assert_eq!(pos.file, 1, "should have rotated to file 1");
     // Verify file 1 exists
     let file1 = dir.join("blocks").join("blk00001.dat");
@@ -276,15 +281,20 @@ fn magic_encode_decode_roundtrip() {
 
 #[test]
 fn magic_bytes_all_networks() {
-    assert_eq!(Magic::Mainnet.to_bytes(),  [0xF9, 0xBE, 0xB4, 0xD9]);
+    assert_eq!(Magic::Mainnet.to_bytes(), [0xF9, 0xBE, 0xB4, 0xD9]);
     assert_eq!(Magic::Testnet3.to_bytes(), [0x0B, 0x11, 0x09, 0x07]);
-    assert_eq!(Magic::Signet.to_bytes(),   [0x0A, 0x03, 0xCF, 0x40]);
-    assert_eq!(Magic::Regtest.to_bytes(),  [0xFA, 0xBF, 0xB5, 0xDA]);
+    assert_eq!(Magic::Signet.to_bytes(), [0x0A, 0x03, 0xCF, 0x40]);
+    assert_eq!(Magic::Regtest.to_bytes(), [0xFA, 0xBF, 0xB5, 0xDA]);
 }
 
 #[test]
 fn magic_different_networks_preserved() {
-    let networks = vec![Magic::Mainnet, Magic::Testnet3, Magic::Signet, Magic::Regtest];
+    let networks = vec![
+        Magic::Mainnet,
+        Magic::Testnet3,
+        Magic::Signet,
+        Magic::Regtest,
+    ];
 
     for magic in networks {
         let bytes = Encoder::new().encode_field(&magic).finish();

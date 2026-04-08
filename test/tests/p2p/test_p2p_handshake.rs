@@ -1,13 +1,13 @@
+use bitcrab_net::p2p::addr_man::AddrMan;
 use bitcrab_net::p2p::message::Magic;
-use bitcrab_net::p2p::messages::{version::Version, verack::Verack, Message};
-use bitcrab_storage::InMemoryBackend;
+use bitcrab_net::p2p::messages::{verack::Verack, version::Version, Message};
 use bitcrab_net::p2p::peer_manager::PeerManager;
 use bitcrab_net::p2p::peer_table::PeerTable;
-use bitcrab_net::p2p::addr_man::AddrMan;
+use bitcrab_storage::InMemoryBackend;
 
-use tokio::net::TcpListener;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::net::TcpListener;
 
 use super::mock::MockPeer;
 
@@ -21,9 +21,12 @@ async fn test_handshake_flow_success() {
     let server_task = tokio::spawn(async move {
         // 1. the mock peer waits for bitcrab to connect
         let mut mock_peer = MockPeer::bind_and_accept(&listener, magic).await;
-        
+
         // 2. Read Bitcrab's version message!
-        let msg = mock_peer.read_msg(Duration::from_millis(500)).await.expect("Failed to read version");
+        let msg = mock_peer
+            .read_msg(Duration::from_millis(500))
+            .await
+            .expect("Failed to read version");
         if let Message::Version(v) = msg {
             assert!(v.version > 0);
         } else {
@@ -36,7 +39,10 @@ async fn test_handshake_flow_success() {
         mock_peer.send_msg(&Verack {}).await;
 
         // 4. Expect Bitcrab's Verack
-        let msg2 = mock_peer.read_msg(Duration::from_millis(500)).await.expect("Failed to read verack");
+        let msg2 = mock_peer
+            .read_msg(Duration::from_millis(500))
+            .await
+            .expect("Failed to read verack");
         if let Message::Verack(_) = msg2 {
             // Success!
         } else {
@@ -49,10 +55,11 @@ async fn test_handshake_flow_success() {
     let table = PeerTable::new(AddrMan::new());
     let peer_manager = Arc::new(PeerManager::new(magic, table));
 
-
     // Outbound Connect and Handshake
     let connect_res = peer_manager.connect_addr(local_addr).await;
     assert!(connect_res.is_ok(), "Handshake should succeed");
 
-    server_task.await.expect("Background server task panicked or failed");
+    server_task
+        .await
+        .expect("Background server task panicked or failed");
 }

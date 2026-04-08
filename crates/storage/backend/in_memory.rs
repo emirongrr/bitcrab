@@ -6,7 +6,7 @@ use rustc_hash::FxHashMap;
 use std::path::Path;
 use std::sync::{Arc, RwLock};
 
-type Table    = FxHashMap<Vec<u8>, Vec<u8>>;
+type Table = FxHashMap<Vec<u8>, Vec<u8>>;
 type Database = FxHashMap<&'static str, Table>;
 
 /// In-memory storage backend intended for testing and CI.
@@ -39,7 +39,11 @@ impl StorageBackend for InMemoryBackend {
     }
 
     fn begin_read(&self) -> Result<Arc<dyn StorageReadView>, StoreError> {
-        let snapshot = self.inner.read().map_err(|_| StoreError::LockPoisoned)?.clone();
+        let snapshot = self
+            .inner
+            .read()
+            .map_err(|_| StoreError::LockPoisoned)?
+            .clone();
         Ok(Arc::new(InMemoryReadTx { snapshot }))
     }
 
@@ -53,8 +57,15 @@ impl StorageBackend for InMemoryBackend {
         &self,
         table_name: &'static str,
     ) -> Result<Box<dyn StorageLockedView>, StoreError> {
-        let snapshot = self.inner.read().map_err(|_| StoreError::LockPoisoned)?.clone();
-        Ok(Box::new(InMemoryLocked { snapshot, table_name }))
+        let snapshot = self
+            .inner
+            .read()
+            .map_err(|_| StoreError::LockPoisoned)?
+            .clone();
+        Ok(Box::new(InMemoryLocked {
+            snapshot,
+            table_name,
+        }))
     }
 
     fn create_checkpoint(&self, _path: &Path) -> Result<(), StoreError> {
@@ -65,9 +76,8 @@ impl StorageBackend for InMemoryBackend {
     }
 }
 
-
 pub struct InMemoryLocked {
-    snapshot:   Arc<Database>,
+    snapshot: Arc<Database>,
     table_name: &'static str,
 }
 
@@ -80,7 +90,6 @@ impl StorageLockedView for InMemoryLocked {
             .cloned())
     }
 }
-
 
 pub struct InMemoryReadTx {
     snapshot: Arc<Database>,
@@ -105,11 +114,7 @@ impl Iterator for InMemoryPrefixIter {
 
 impl StorageReadView for InMemoryReadTx {
     fn get(&self, table: &'static str, key: &[u8]) -> Result<Option<Vec<u8>>, StoreError> {
-        Ok(self
-            .snapshot
-            .get(table)
-            .and_then(|t| t.get(key))
-            .cloned())
+        Ok(self.snapshot.get(table).and_then(|t| t.get(key)).cloned())
     }
 
     fn prefix_iterator(
@@ -141,7 +146,6 @@ impl StorageReadView for InMemoryReadTx {
         }))
     }
 }
-
 
 pub struct InMemoryWriteTx {
     backend: Arc<RwLock<Arc<Database>>>,

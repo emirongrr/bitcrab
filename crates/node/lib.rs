@@ -1,4 +1,4 @@
 //! Bitcoin node — orchestrates net and storage.
 
 pub mod node;
-pub use node::{Node, NodeError, init_node, NodeConfig, NodeHandles};
+pub use node::{init_node, Node, NodeConfig, NodeError, NodeHandles};

@@ -5,27 +5,28 @@
 //!
 //! Bitcoin Core: CNode in src/net.h
 
+use bytes::{Buf, BytesMut};
+use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
-use tokio::sync::mpsc::{channel, Sender, Receiver};
+use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::sync::oneshot;
-use tokio::time::{Instant, Duration, interval};
+use tokio::time::{interval, Duration, Instant};
 use tracing::{debug, info, warn};
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
-use bytes::{BytesMut, Buf};
 
 use super::{
+    actor::{ActorError, ActorRef},
     codec::{decode_header, encode_header, verify_checksum},
     errors::P2pError,
     message::Magic,
-    messages::{Message, ping::{Ping, Pong}},
-
-    actor::{ActorRef, ActorError},
+    messages::{
+        ping::{Ping, Pong},
+        Message,
+    },
     peer_table::PeerTable,
 };
-
 
 /// Messages sent to the PeerActor via PeerHandle.
 pub enum PeerMessage {
@@ -69,9 +70,6 @@ impl PeerHandle {
     }
 }
 
-
-
-
 /// The internal actor that manages a single peer connection.
 struct PeerActor {
     addr: SocketAddr,
@@ -96,14 +94,12 @@ struct PeerActor {
     read_buf: BytesMut,
 }
 
-
 impl PeerActor {
     async fn run(mut self) {
         let mut ping_interval = interval(Duration::from_secs(120));
         let mut receiver = self.receiver.take().expect("receiver already taken");
 
         loop {
-
             tokio::select! {
                 // 1. Handle messages from the PeerHandle
                 Some(msg) = receiver.recv() => {
@@ -124,7 +120,7 @@ impl PeerActor {
                                 services: self.services,
                                 start_height: self.start_height,
                                 latency: self.latency,
-                                conntime: self.conntime.elapsed().as_secs(), 
+                                conntime: self.conntime.elapsed().as_secs(),
                             };
                             let _ = tx.send(info);
                         }
@@ -167,7 +163,13 @@ impl PeerActor {
         }
         info!("[{}] PeerActor terminated", self.addr);
         // Explicitly notify the PeerTable that we are gone.
-        let _ = self.table.actor().cast(crate::p2p::peer_table::PeerTableMessage::RemovePeer(self.addr)).await;
+        let _ = self
+            .table
+            .actor()
+            .cast(crate::p2p::peer_table::PeerTableMessage::RemovePeer(
+                self.addr,
+            ))
+            .await;
     }
 
     async fn send_to_stream(&mut self, msg: &Message) -> Result<(), P2pError> {
@@ -178,13 +180,16 @@ impl PeerActor {
         Ok(())
     }
 
-
     async fn send_ping(&mut self) -> Result<(), P2pError> {
         // Check timeout for existing pings (>20m)
-        if self.pending_pings.values().any(|v| v.elapsed().as_secs() > 1200) {
-            return Err(P2pError::ConnectionFailed { 
-                addr: self.addr.to_string(), 
-                reason: "ping timeout".into() 
+        if self
+            .pending_pings
+            .values()
+            .any(|v| v.elapsed().as_secs() > 1200)
+        {
+            return Err(P2pError::ConnectionFailed {
+                addr: self.addr.to_string(),
+                reason: "ping timeout".into(),
             });
         }
 
@@ -193,14 +198,12 @@ impl PeerActor {
         self.send_to_stream(&Message::Ping(Ping { nonce })).await
     }
 
-
     async fn read_message(&mut self) -> Result<Option<Message>, P2pError> {
         loop {
             // 1. Try to parse from the existing buffer
             if self.read_buf.len() >= 24 {
                 let hdr_buf: &[u8; 24] = &self.read_buf[..24].try_into().unwrap();
                 let msg_hdr = match decode_header(hdr_buf, self.magic) {
-
                     Ok(hdr) => hdr,
                     Err(e) => {
                         self.read_buf.advance(1); // corrupted? skip 1 byte and retry (Bitcoin Core behavior)
@@ -215,7 +218,7 @@ impl PeerActor {
                     verify_checksum(&msg_hdr, payload)?;
                     let msg = Message::decode(&msg_hdr.command, payload)
                         .map_err(|e| P2pError::DecodeError(e.to_string()))?;
-                    
+
                     self.read_buf.advance(total_len);
                     return Ok(Some(msg));
                 }
@@ -231,11 +234,11 @@ impl PeerActor {
         }
     }
 
-
     async fn handle_incoming(&mut self, msg: Message) -> Result<(), P2pError> {
         match msg {
             Message::Ping(ping) => {
-                self.send_to_stream(&Message::Pong(Pong { nonce: ping.nonce })).await?;
+                self.send_to_stream(&Message::Pong(Pong { nonce: ping.nonce }))
+                    .await?;
             }
 
             Message::Pong(pong) => {
@@ -244,18 +247,32 @@ impl PeerActor {
                 }
             }
             Message::GetAddr(_) => {
-                debug!("[{}] received getaddr, responding with known peers", self.addr);
+                debug!(
+                    "[{}] received getaddr, responding with known peers",
+                    self.addr
+                );
                 match self.table.get_addresses().await {
                     Ok(addresses) => {
-                        let _ = self.send_to_stream(&Message::Addr(crate::p2p::messages::addr::Addr { addresses })).await;
+                        let _ = self
+                            .send_to_stream(&Message::Addr(crate::p2p::messages::addr::Addr {
+                                addresses,
+                            }))
+                            .await;
                     }
                     Err(e) => {
-                        warn!("[{}] failed to fetch addresses from table: {}", self.addr, e);
+                        warn!(
+                            "[{}] failed to fetch addresses from table: {}",
+                            self.addr, e
+                        );
                     }
                 }
             }
             Message::Addr(addr) => {
-                debug!("[{}] received addr with {} peers", self.addr, addr.addresses.len());
+                debug!(
+                    "[{}] received addr with {} peers",
+                    self.addr,
+                    addr.addresses.len()
+                );
                 let _ = self.table.add_addresses(addr.addresses, self.addr).await;
             }
             other => {
@@ -265,7 +282,6 @@ impl PeerActor {
             }
         }
         Ok(())
-
     }
 }
 
@@ -304,20 +320,17 @@ impl PeerHandle {
             read_buf: BytesMut::with_capacity(1024 * 64),
         };
 
-
         let addr_clone = addr;
         tokio::spawn(async move {
             actor.run().await;
         });
 
         (
-            Self { 
-                addr: addr_clone, 
-                actor: ActorRef::new(actor_tx) 
-            }, 
-            inbound_rx
+            Self {
+                addr: addr_clone,
+                actor: ActorRef::new(actor_tx),
+            },
+            inbound_rx,
         )
     }
 }
-
-

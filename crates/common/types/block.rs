@@ -8,8 +8,8 @@
 //! We keep serialization as explicit methods — no macros.
 
 use super::{
-    hash::{hash256, BlockHash, Hash256},
     flat_file_pos::FlatFilePos,
+    hash::{hash256, BlockHash, Hash256},
 };
 use crate::wire::{
     decode::{BitcoinDecode, Decoder},
@@ -119,12 +119,12 @@ impl BlockHeader {
     /// Deserialize from the 80-byte wire format.
     pub fn deserialize(buf: &[u8; 80]) -> Self {
         Self {
-            version:     i32::from_le_bytes(buf[0..4].try_into().unwrap()),
-            prev_hash:   BlockHash::from_bytes(buf[4..36].try_into().unwrap()),
+            version: i32::from_le_bytes(buf[0..4].try_into().unwrap()),
+            prev_hash: BlockHash::from_bytes(buf[4..36].try_into().unwrap()),
             merkle_root: Hash256::from_bytes(buf[36..68].try_into().unwrap()),
-            time:        u32::from_le_bytes(buf[68..72].try_into().unwrap()),
-            bits:        u32::from_le_bytes(buf[72..76].try_into().unwrap()),
-            nonce:       u32::from_le_bytes(buf[76..80].try_into().unwrap()),
+            time: u32::from_le_bytes(buf[68..72].try_into().unwrap()),
+            bits: u32::from_le_bytes(buf[72..76].try_into().unwrap()),
+            nonce: u32::from_le_bytes(buf[76..80].try_into().unwrap()),
         }
     }
 
@@ -149,9 +149,15 @@ impl BlockHeader {
             return target;
         }
         let pos = 32usize.saturating_sub(exponent);
-        if pos     < 32 { target[pos]     = ((mantissa >> 16) & 0xFF) as u8; }
-        if pos + 1 < 32 { target[pos + 1] = ((mantissa >>  8) & 0xFF) as u8; }
-        if pos + 2 < 32 { target[pos + 2] = ( mantissa        & 0xFF) as u8; }
+        if pos < 32 {
+            target[pos] = ((mantissa >> 16) & 0xFF) as u8;
+        }
+        if pos + 1 < 32 {
+            target[pos + 1] = ((mantissa >> 8) & 0xFF) as u8;
+        }
+        if pos + 2 < 32 {
+            target[pos + 2] = (mantissa & 0xFF) as u8;
+        }
         target
     }
 
@@ -213,9 +219,7 @@ pub enum BlockError {
 
     /// Timestamp not greater than Median Time Past (BIP-113).
     /// Bitcoin Core: `ContextualCheckBlockHeader()` — `src/validation.cpp`
-    #[error(
-        "block time {block_time} must be greater than median time past {median_time_past}"
-    )]
+    #[error("block time {block_time} must be greater than median time past {median_time_past}")]
     TimestampBelowMedianTimePast {
         block_time: u32,
         median_time_past: u32,
@@ -223,10 +227,12 @@ pub enum BlockError {
 
     /// `bits` does not match the required difficulty at this height.
     /// Bitcoin Core: `GetNextWorkRequired()` comparison
-    #[error(
-        "wrong difficulty at height {height}: got {actual:#010x}, expected {expected:#010x}"
-    )]
-    WrongDifficulty { height: u32, actual: u32, expected: u32 },
+    #[error("wrong difficulty at height {height}: got {actual:#010x}, expected {expected:#010x}")]
+    WrongDifficulty {
+        height: u32,
+        actual: u32,
+        expected: u32,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -238,8 +244,8 @@ pub enum BlockError {
 /// Bitcoin Core: `CBlockIndex` in `src/chain.h`
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BlockIndex {
-    pub header:   BlockHeader,
-    pub height:   BlockHeight,
+    pub header: BlockHeader,
+    pub height: BlockHeight,
     pub file_pos: Option<FlatFilePos>,
     pub undo_pos: Option<FlatFilePos>,
 }
@@ -247,11 +253,11 @@ pub struct BlockIndex {
 impl BitcoinEncode for BlockIndex {
     fn encode(&self, enc: Encoder) -> Encoder {
         enc.encode_field(&self.header)
-           .encode_field(&self.height)
-           .encode_field(&self.file_pos.is_some())
-           .encode_field(&self.file_pos.unwrap_or(FlatFilePos::new(0, 0)))
-           .encode_field(&self.undo_pos.is_some())
-           .encode_field(&self.undo_pos.unwrap_or(FlatFilePos::new(0, 0)))
+            .encode_field(&self.height)
+            .encode_field(&self.file_pos.is_some())
+            .encode_field(&self.file_pos.unwrap_or(FlatFilePos::new(0, 0)))
+            .encode_field(&self.undo_pos.is_some())
+            .encode_field(&self.undo_pos.unwrap_or(FlatFilePos::new(0, 0)))
     }
 }
 
@@ -259,15 +265,23 @@ impl BitcoinDecode for BlockIndex {
     fn decode(dec: Decoder) -> Result<(Self, Decoder), DecodeError> {
         let (header, dec) = dec.decode_field::<BlockHeader>("BlockIndex::header")?;
         let (height, dec) = dec.decode_field::<BlockHeight>("BlockIndex::height")?;
-        
+
         let (has_pos, dec) = dec.decode_field::<bool>("BlockIndex::has_pos")?;
-        let (pos,     dec) = dec.decode_field::<FlatFilePos>("BlockIndex::pos")?;
+        let (pos, dec) = dec.decode_field::<FlatFilePos>("BlockIndex::pos")?;
         let file_pos = if has_pos { Some(pos) } else { None };
 
         let (has_undo, dec) = dec.decode_field::<bool>("BlockIndex::has_undo")?;
-        let (undo,     dec) = dec.decode_field::<FlatFilePos>("BlockIndex::undo")?;
+        let (undo, dec) = dec.decode_field::<FlatFilePos>("BlockIndex::undo")?;
         let undo_pos = if has_undo { Some(undo) } else { None };
 
-        Ok((BlockIndex { header, height, file_pos, undo_pos }, dec))
+        Ok((
+            BlockIndex {
+                header,
+                height,
+                file_pos,
+                undo_pos,
+            },
+            dec,
+        ))
     }
 }

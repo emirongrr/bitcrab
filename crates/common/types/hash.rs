@@ -17,7 +17,7 @@ use std::fmt;
 ///
 /// Bitcoin Core: `CHash256` in src/hash.h
 pub fn hash256(data: &[u8]) -> [u8; 32] {
-    let first  = Sha256::digest(data);
+    let first = Sha256::digest(data);
     let second = Sha256::digest(first);
     second.into()
 }
@@ -26,7 +26,7 @@ pub fn hash256(data: &[u8]) -> [u8; 32] {
 ///
 /// Bitcoin Core: `CHash160` in src/hash.h
 pub fn hash160(data: &[u8]) -> [u8; 20] {
-    let sha  = Sha256::digest(data);
+    let sha = Sha256::digest(data);
     let ripe = Ripemd160::digest(sha);
     ripe.into()
 }
@@ -61,7 +61,9 @@ impl Hash256 {
     }
 
     pub const ZERO: Self = Self([0u8; 32]);
-    pub const fn zero() -> Self { Self::ZERO }
+    pub const fn zero() -> Self {
+        Self::ZERO
+    }
 }
 
 impl fmt::Debug for Hash256 {
@@ -107,7 +109,9 @@ impl BlockHash {
     }
 
     pub const ZERO: Self = Self([0u8; 32]);
-    pub const fn zero() -> Self { Self::ZERO }
+    pub const fn zero() -> Self {
+        Self::ZERO
+    }
 }
 
 impl fmt::Debug for BlockHash {
@@ -153,7 +157,9 @@ impl Txid {
     }
 
     pub const ZERO: Self = Self([0u8; 32]);
-    pub const fn zero() -> Self { Self::ZERO }
+    pub const fn zero() -> Self {
+        Self::ZERO
+    }
 }
 
 impl fmt::Debug for Txid {
@@ -194,7 +200,9 @@ impl Hash160 {
     }
 
     pub const ZERO: Self = Self([0u8; 20]);
-    pub const fn zero() -> Self { Self::ZERO }
+    pub const fn zero() -> Self {
+        Self::ZERO
+    }
 }
 
 impl fmt::Debug for Hash160 {

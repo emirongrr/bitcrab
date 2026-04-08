@@ -39,7 +39,7 @@ use bitcrab_common::wire::{
 use std::{
     fs::{self, File, OpenOptions},
     io::{Read, Seek, SeekFrom, Write},
-    path::{PathBuf},
+    path::PathBuf,
 };
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -97,35 +97,35 @@ impl BlockFileInfo {
     pub fn update_for_block(&mut self, height: u32, time: u32) {
         if self.blocks == 0 {
             self.height_first = height;
-            self.time_first   = time;
+            self.time_first = time;
         }
-        self.blocks      += 1;
-        self.height_last  = self.height_last.max(height);
-        self.time_last    = self.time_last.max(time);
+        self.blocks += 1;
+        self.height_last = self.height_last.max(height);
+        self.time_last = self.time_last.max(time);
     }
 }
 
 impl BitcoinEncode for BlockFileInfo {
     fn encode(&self, enc: Encoder) -> Encoder {
         enc.encode_field(&self.blocks)
-           .encode_field(&self.size)
-           .encode_field(&self.undo_size)
-           .encode_field(&self.height_first)
-           .encode_field(&self.height_last)
-           .encode_field(&self.time_first)
-           .encode_field(&self.time_last)
+            .encode_field(&self.size)
+            .encode_field(&self.undo_size)
+            .encode_field(&self.height_first)
+            .encode_field(&self.height_last)
+            .encode_field(&self.time_first)
+            .encode_field(&self.time_last)
     }
 }
 
 impl BitcoinDecode for BlockFileInfo {
     fn decode(dec: Decoder) -> Result<(Self, Decoder), DecodeError> {
-        let (blocks,       dec) = dec.decode_field::<u32>("BlockFileInfo::blocks")?;
-        let (size,         dec) = dec.decode_field::<u64>("BlockFileInfo::size")?;
-        let (undo_size,    dec) = dec.decode_field::<u64>("BlockFileInfo::undo_size")?;
+        let (blocks, dec) = dec.decode_field::<u32>("BlockFileInfo::blocks")?;
+        let (size, dec) = dec.decode_field::<u64>("BlockFileInfo::size")?;
+        let (undo_size, dec) = dec.decode_field::<u64>("BlockFileInfo::undo_size")?;
         let (height_first, dec) = dec.decode_field::<u32>("BlockFileInfo::height_first")?;
-        let (height_last,  dec) = dec.decode_field::<u32>("BlockFileInfo::height_last")?;
-        let (time_first,   dec) = dec.decode_field::<u32>("BlockFileInfo::time_first")?;
-        let (time_last,    dec) = dec.decode_field::<u32>("BlockFileInfo::time_last")?;
+        let (height_last, dec) = dec.decode_field::<u32>("BlockFileInfo::height_last")?;
+        let (time_first, dec) = dec.decode_field::<u32>("BlockFileInfo::time_first")?;
+        let (time_last, dec) = dec.decode_field::<u32>("BlockFileInfo::time_last")?;
         Ok((
             BlockFileInfo {
                 blocks,
@@ -151,15 +151,18 @@ impl BitcoinDecode for BlockFileInfo {
 /// Equivalent to Bitcoin Core's `FlatFileSeq`.
 #[derive(Debug, Clone)]
 pub struct FlatFileSeq {
-    dir:        PathBuf,
-    prefix:     &'static str,
+    dir: PathBuf,
+    prefix: &'static str,
     chunk_size: u64,
 }
 
-
 impl FlatFileSeq {
     pub fn new(dir: impl Into<PathBuf>, prefix: &'static str, chunk_size: u64) -> Self {
-        Self { dir: dir.into(), prefix, chunk_size }
+        Self {
+            dir: dir.into(),
+            prefix,
+            chunk_size,
+        }
     }
 
     /// Build the path for file number `n` — e.g. `blocks/blk00042.dat`.
@@ -182,10 +185,8 @@ impl FlatFileSeq {
 
     /// Open file `n` read-only.
     pub fn open_for_read(&self, n: u32) -> Result<File, StoreError> {
-        File::open(self.path(n)).map_err(|_| StoreError::BlockFileUnavailable {
-            file:   n,
-            offset: 0,
-        })
+        File::open(self.path(n))
+            .map_err(|_| StoreError::BlockFileUnavailable { file: n, offset: 0 })
     }
 
     /// Finalize file `n`: truncate unused pre-allocated space and fsync.
@@ -211,7 +212,8 @@ impl FlatFileSeq {
         let boundary = ((current / self.chunk_size) + 1) * self.chunk_size;
         if current < boundary {
             let mut f = file.try_clone().map_err(StoreError::Io)?;
-            f.seek(SeekFrom::Start(boundary - 1)).map_err(StoreError::Io)?;
+            f.seek(SeekFrom::Start(boundary - 1))
+                .map_err(StoreError::Io)?;
             f.write_all(&[0u8]).map_err(StoreError::Io)?;
         }
         Ok(())
@@ -228,9 +230,9 @@ impl FlatFileSeq {
 ///
 /// Equivalent to the flat-file portion of Bitcoin Core's `BlockManager`.
 pub struct BlockFileManager {
-    blocks:       FlatFileSeq,
-    undo:         FlatFileSeq,
-    magic:        Magic,
+    blocks: FlatFileSeq,
+    undo: FlatFileSeq,
+    magic: Magic,
     current_file: u32,
     /// Bytes written into the current block file, including headers.
     pub current_size: u64,
@@ -240,8 +242,8 @@ pub struct BlockFileManager {
 #[derive(Debug, Clone)]
 pub struct BlockFileReader {
     blocks: FlatFileSeq,
-    undo:   FlatFileSeq,
-    magic:  Magic,
+    undo: FlatFileSeq,
+    magic: Magic,
 }
 
 impl BlockFileReader {
@@ -254,20 +256,15 @@ impl BlockFileReader {
     }
 }
 
-
 impl BlockFileManager {
     /// Open (or resume) the flat-file sequence.
     ///
     /// `last_file` is the file number read from `CHAIN_META` on startup.
     /// Pass `0` for a fresh database.
-    pub fn new(
-        dir: impl Into<PathBuf>,
-        magic: Magic,
-        last_file: u32,
-    ) -> Result<Self, StoreError> {
+    pub fn new(dir: impl Into<PathBuf>, magic: Magic, last_file: u32) -> Result<Self, StoreError> {
         let dir = dir.into();
         let blocks = FlatFileSeq::new(dir.join("blocks"), "blk", BLOCK_FILE_CHUNK);
-        let undo   = FlatFileSeq::new(dir.join("blocks"), "rev", UNDO_FILE_CHUNK);
+        let undo = FlatFileSeq::new(dir.join("blocks"), "rev", UNDO_FILE_CHUNK);
 
         let current_size = {
             let path = blocks.path(last_file);
@@ -278,19 +275,23 @@ impl BlockFileManager {
             }
         };
 
-
-        Ok(Self { blocks, undo, magic, current_file: last_file, current_size })
+        Ok(Self {
+            blocks,
+            undo,
+            magic,
+            current_file: last_file,
+            current_size,
+        })
     }
 
     /// Obtain a thread-safe reader handle.
     pub fn reader(&self) -> BlockFileReader {
         BlockFileReader {
             blocks: self.blocks.clone(),
-            undo:   self.undo.clone(),
-            magic:  self.magic,
+            undo: self.undo.clone(),
+            magic: self.magic,
         }
     }
-
 
     // ── Write ─────────────────────────────────────────────────────────────────
 
@@ -305,16 +306,17 @@ impl BlockFileManager {
         if self.current_size + record_len > MAX_BLOCK_FILE_SIZE && self.current_size > 0 {
             self.blocks.finalize(self.current_file, self.current_size)?;
             self.current_file += 1;
-            self.current_size  = 0;
+            self.current_size = 0;
         }
 
         let write_at = self.current_size;
         let mut file = self.blocks.open_for_write(self.current_file)?;
-        file.seek(SeekFrom::Start(write_at)).map_err(StoreError::Io)?;
+        file.seek(SeekFrom::Start(write_at))
+            .map_err(StoreError::Io)?;
 
         self.write_record(&mut file, raw_block)?;
         file.sync_all().map_err(StoreError::Io)?;
-        drop(file);  // Explicitly close on Windows before any read attempts
+        drop(file); // Explicitly close on Windows before any read attempts
 
         let data_offset = write_at + 8;
         self.current_size += record_len;
@@ -335,16 +337,20 @@ impl BlockFileManager {
     ) -> Result<(FlatFilePos, u64), StoreError> {
         let write_at = current_undo_size;
         let mut file = self.undo.open_for_write(blk_file)?;
-        file.seek(SeekFrom::Start(write_at)).map_err(StoreError::Io)?;
+        file.seek(SeekFrom::Start(write_at))
+            .map_err(StoreError::Io)?;
 
         self.write_record(&mut file, undo_data)?;
         file.sync_all().map_err(StoreError::Io)?;
-        drop(file);  // Explicitly close on Windows before any read attempts
+        drop(file); // Explicitly close on Windows before any read attempts
 
-        let data_offset    = write_at + 8;
-        let new_undo_size  = current_undo_size + 8 + undo_data.len() as u64;
+        let data_offset = write_at + 8;
+        let new_undo_size = current_undo_size + 8 + undo_data.len() as u64;
 
-        Ok((FlatFilePos::new(blk_file, data_offset as u32), new_undo_size))
+        Ok((
+            FlatFilePos::new(blk_file, data_offset as u32),
+            new_undo_size,
+        ))
     }
 
     // ── Read ──────────────────────────────────────────────────────────────────
@@ -358,7 +364,6 @@ impl BlockFileManager {
     pub fn read_undo(&self, pos: FlatFilePos) -> Result<Vec<u8>, StoreError> {
         read_record(&self.undo, pos, self.magic)
     }
-
 
     // ── State ─────────────────────────────────────────────────────────────────
 
@@ -404,7 +409,6 @@ impl BlockFileManager {
 /// `pos.offset` points to the data start. We seek back 4 bytes to read
 /// the size field, then forward to read that many bytes of data.
 fn read_record(seq: &FlatFileSeq, pos: FlatFilePos, _magic: Magic) -> Result<Vec<u8>, StoreError> {
-
     let mut file = seq.open_for_read(pos.file)?;
 
     let size_at = (pos.offset as u64).checked_sub(4).ok_or_else(|| {
@@ -414,23 +418,27 @@ fn read_record(seq: &FlatFileSeq, pos: FlatFilePos, _magic: Magic) -> Result<Vec
         ))
     })?;
 
-    file.seek(SeekFrom::Start(size_at)).map_err(StoreError::Io)?;
+    file.seek(SeekFrom::Start(size_at))
+        .map_err(StoreError::Io)?;
 
     let mut size_buf = [0u8; 4];
-    file.read_exact(&mut size_buf).map_err(|_| StoreError::BlockFileUnavailable {
-        file:   pos.file,
-        offset: pos.offset,
-    })?;
+    file.read_exact(&mut size_buf)
+        .map_err(|_| StoreError::BlockFileUnavailable {
+            file: pos.file,
+            offset: pos.offset,
+        })?;
 
-    let (size, dec) = Decoder::new(&size_buf).decode_field::<u32>("record::size")
+    let (size, dec) = Decoder::new(&size_buf)
+        .decode_field::<u32>("record::size")
         .map_err(StoreError::WireDecode)?;
     dec.finish("record::size").map_err(StoreError::WireDecode)?;
 
     let mut data = vec![0u8; size as usize];
-    file.read_exact(&mut data).map_err(|_| StoreError::BlockFileUnavailable {
-        file:   pos.file,
-        offset: pos.offset,
-    })?;
+    file.read_exact(&mut data)
+        .map_err(|_| StoreError::BlockFileUnavailable {
+            file: pos.file,
+            offset: pos.offset,
+        })?;
 
     Ok(data)
 }

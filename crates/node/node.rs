@@ -9,24 +9,18 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use bitcrab_net::p2p::{
+    addr_man::AddrMan,
     message::Magic,
-    messages::{
-        Message,
-        getheaders::GetHeaders,
-    },
+    messages::{getheaders::GetHeaders, Message},
     peer_manager::PeerManager,
     peer_table::PeerTable,
-    addr_man::AddrMan,
 };
 
+use bitcrab_common::types::{block::BlockHeight, hash::BlockHash};
 use bitcrab_storage::Store;
-use bitcrab_common::types::{
-    block::BlockHeight,
-    hash::BlockHash,
-};
 
 use thiserror::Error;
-use tracing::{info, debug};
+use tracing::{debug, info};
 
 // ── Error ─────────────────────────────────────────────────────────────────────
 
@@ -49,17 +43,20 @@ pub enum NodeError {
 
 /// The main node — owns storage and the peer manager.
 pub struct Node {
-    pub store:        Store,
+    pub store: Store,
     pub peer_manager: Arc<PeerManager>,
 }
 
 impl Node {
     /// Create an in-memory node for testing.
     pub fn in_memory(magic: Magic) -> Result<Self, NodeError> {
-        let store        = Store::in_memory(magic).map_err(NodeError::Storage)?;
-        let table        = PeerTable::new(AddrMan::new());
+        let store = Store::in_memory(magic).map_err(NodeError::Storage)?;
+        let table = PeerTable::new(AddrMan::new());
         let peer_manager = Arc::new(PeerManager::new(magic, table));
-        Ok(Self { store, peer_manager })
+        Ok(Self {
+            store,
+            peer_manager,
+        })
     }
 
     /// Start the Bitcoin-compatible RPC server on a background task.
@@ -76,8 +73,6 @@ impl Node {
         });
     }
 
-
-
     /// Connect to a peer, send getheaders from our tip, store received headers.
     ///
     /// Returns the number of headers stored.
@@ -90,17 +85,14 @@ impl Node {
         info!("[sync] connected to {addr}, starting header sync");
 
         // Build locator from our best block, or genesis if empty.
-        let tip = self.store
-            .get_best_block()?
-            .unwrap_or(BlockHash::zero());
+        let tip = self.store.get_best_block()?.unwrap_or(BlockHash::zero());
 
         let getheaders = GetHeaders::from_tip(tip);
-        peer.send(Message::GetHeaders(getheaders)).await.map_err(|_e| bitcrab_net::p2p::errors::P2pError::ConnectionClosed)?;
-
+        peer.send(Message::GetHeaders(getheaders))
+            .await
+            .map_err(|_e| bitcrab_net::p2p::errors::P2pError::ConnectionClosed)?;
 
         info!("[sync] sent getheaders (tip={})", tip);
-
-
 
         // Wait for the headers response.
         let headers_msg = loop {
@@ -124,16 +116,23 @@ impl Node {
         // Store each header.
         // We don't know exact heights yet — we derive them from chain position.
         // For now: start from best_height + 1, increment per header.
-        let start_height = self.best_height()?.map(|h| h.next()).unwrap_or(BlockHeight::GENESIS);
+        let start_height = self
+            .best_height()?
+            .map(|h| h.next())
+            .unwrap_or(BlockHeight::GENESIS);
 
         for (i, header) in headers_msg.headers.iter().enumerate() {
-            let height  = BlockHeight(start_height.0 + i as u32);
+            let height = BlockHeight(start_height.0 + i as u32);
             let is_best = i == count - 1;
-            self.store.store_header(header.clone(), height, is_best).await?;
+            self.store
+                .store_header(header.clone(), height, is_best)
+                .await?;
         }
 
-
-        info!("[sync] stored {count} headers, new tip height={}", start_height.0 + count as u32 - 1);
+        info!(
+            "[sync] stored {count} headers, new tip height={}",
+            start_height.0 + count as u32 - 1
+        );
 
         Ok(count)
     }
@@ -180,11 +179,11 @@ pub async fn init_node(config: NodeConfig) -> Result<NodeHandles, NodeError> {
 
     // 1. Storage
     let store = if let Some(path) = config.data_dir {
-        Store::new(path, bitcrab_storage::EngineType::RocksDB, config.magic).map_err(NodeError::Storage)?
+        Store::new(path, bitcrab_storage::EngineType::RocksDB, config.magic)
+            .map_err(NodeError::Storage)?
     } else {
         Store::in_memory(config.magic).map_err(NodeError::Storage)?
     };
-
 
     // 2. Networking
     let table = PeerTable::new(AddrMan::new());
@@ -204,9 +203,9 @@ pub async fn init_node(config: NodeConfig) -> Result<NodeHandles, NodeError> {
     let p2p_config = bitcrab_net::p2p::network::NetworkConfig {
         magic: config.magic,
         port: match config.magic {
-            Magic::Signet  => 38333,
+            Magic::Signet => 38333,
             Magic::Mainnet => 8333,
-            _              => 38333,
+            _ => 38333,
         },
     };
     let p2p_cancel = cancel_token.clone();
@@ -225,10 +224,7 @@ pub async fn init_node(config: NodeConfig) -> Result<NodeHandles, NodeError> {
 
     // 5. RPC (Optional)
     if let Some(rpc_addr) = config.rpc_addr {
-        let rpc_ctx = bitcrab_rpc::context::RpcContext::new(
-            store.clone(),
-            peer_manager.clone(),
-        );
+        let rpc_ctx = bitcrab_rpc::context::RpcContext::new(store.clone(), peer_manager.clone());
 
         let rpc_cancel = cancel_token.clone();
         tracker.spawn(async move {
@@ -245,7 +241,6 @@ pub async fn init_node(config: NodeConfig) -> Result<NodeHandles, NodeError> {
         });
     }
 
-
     tracker.close();
 
     Ok(NodeHandles {
@@ -254,4 +249,3 @@ pub async fn init_node(config: NodeConfig) -> Result<NodeHandles, NodeError> {
         tracker,
     })
 }
-

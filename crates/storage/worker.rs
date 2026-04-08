@@ -7,12 +7,11 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, info};
 
-
 use bitcrab_common::types::block::{BlockHeader, BlockHeight, BlockIndex};
-use bitcrab_common::FlatFilePos;
 use bitcrab_common::wire::encode::Encoder;
+use bitcrab_common::FlatFilePos;
 
-use crate::api::{StorageBackend, tables};
+use crate::api::{tables, StorageBackend};
 use crate::block_file::BlockFileManager;
 use crate::error::StoreError;
 
@@ -64,11 +63,21 @@ impl StorageWorker {
 
         while let Some(msg) = self.receiver.recv().await {
             match msg {
-                WriteMessage::StoreHeader { header, height, is_best, reply_to } => {
+                WriteMessage::StoreHeader {
+                    header,
+                    height,
+                    is_best,
+                    reply_to,
+                } => {
                     let res = self.handle_store_header(header, height, is_best);
                     let _ = reply_to.send(res);
                 }
-                WriteMessage::StoreBlock { header, height, raw_block, reply_to } => {
+                WriteMessage::StoreBlock {
+                    header,
+                    height,
+                    raw_block,
+                    reply_to,
+                } => {
                     let res = self.handle_store_block(header, height, &raw_block).await;
                     let _ = reply_to.send(res);
                 }
@@ -90,18 +99,18 @@ impl StorageWorker {
     ) -> Result<(), StoreError> {
         let hash = header.block_hash();
         let index = BlockIndex {
-            header:   header.clone(),
+            header: header.clone(),
             height,
             file_pos: None,
             undo_pos: None,
         };
 
         let mut write = self.backend.begin_write()?;
-        
+
         let mut key = Vec::with_capacity(33);
         key.push(tables::PREFIX_BLOCK);
         key.extend_from_slice(hash.as_bytes());
-        
+
         let value = Encoder::new().encode_field(&index).finish();
         write.put(tables::BLOCK_INDEX, &key, &value)?;
 
@@ -119,33 +128,37 @@ impl StorageWorker {
         raw_block: &[u8],
     ) -> Result<FlatFilePos, StoreError> {
         let hash = header.block_hash();
-        
+
         // 1. Write to blk*.dat (Sequential access guaranteed here)
         let pos = self.block_file_manager.write_block(raw_block)?;
         let last_file = self.block_file_manager.current_file();
 
         // 2. Update index with position
         let index = BlockIndex {
-            header:   header.clone(),
+            header: header.clone(),
             height,
             file_pos: Some(pos),
             undo_pos: None,
         };
 
         let mut write = self.backend.begin_write()?;
-        
+
         let mut key = Vec::with_capacity(33);
         key.push(tables::PREFIX_BLOCK);
         key.extend_from_slice(hash.as_bytes());
-        
+
         let value = Encoder::new().encode_field(&index).finish();
         write.put(tables::BLOCK_INDEX, &key, &value)?;
 
         // 3. Update last file in metadata
-        write.put(tables::CHAIN_META, &[tables::KEY_LAST_FILE], &last_file.to_le_bytes())?;
+        write.put(
+            tables::CHAIN_META,
+            &[tables::KEY_LAST_FILE],
+            &last_file.to_le_bytes(),
+        )?;
 
         write.commit()?;
-        
+
         Ok(pos)
     }
 }

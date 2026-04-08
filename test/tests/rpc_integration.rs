@@ -1,24 +1,24 @@
 //! Integration tests for the RPC layer.
 
-use std::net::SocketAddr;
-use tokio::time::{sleep, Duration};
 use bitcrab_net::p2p::message::Magic;
 use bitcrab_node::Node;
 use serde_json::json;
+use std::net::SocketAddr;
+use tokio::time::{sleep, Duration};
 
 #[tokio::test]
 async fn test_rpc_getblockchaininfo() {
     // 1. Initialize an in-memory node
     let node = Node::in_memory(Magic::Regtest).expect("Failed to create node");
-    
+
     // 2. Start RPC server on a random port
     let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
     let actual_addr = listener.local_addr().unwrap();
     drop(listener); // Release port so axum can bind it
-    
+
     node.start_rpc(actual_addr);
-    
+
     // Give the server a moment to start
     sleep(Duration::from_millis(500)).await;
 
@@ -31,16 +31,17 @@ async fn test_rpc_getblockchaininfo() {
         "params": []
     });
 
-    let res = client.post(format!("http://{}", actual_addr))
+    let res = client
+        .post(format!("http://{}", actual_addr))
         .json(&body)
         .send()
         .await
         .expect("Failed to send RPC request");
 
     assert!(res.status().is_success());
-    
+
     let json: serde_json::Value = res.json().await.expect("Failed to parse response");
-    
+
     // 4. Verify fields
     let result = &json["result"];
     assert_eq!(result["blocks"], 0);
@@ -55,7 +56,7 @@ async fn test_rpc_getnetworkinfo() {
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
     let actual_addr = listener.local_addr().unwrap();
     drop(listener);
-    
+
     node.start_rpc(actual_addr);
     sleep(Duration::from_millis(500)).await;
 
@@ -67,17 +68,18 @@ async fn test_rpc_getnetworkinfo() {
         "params": []
     });
 
-    let res = client.post(format!("http://{}", actual_addr))
+    let res = client
+        .post(format!("http://{}", actual_addr))
         .json(&body)
         .send()
         .await
         .expect("Failed to send RPC request");
 
     assert!(res.status().is_success());
-    
+
     let json: serde_json::Value = res.json().await.expect("Failed to parse response");
     let result = &json["result"];
-    
+
     assert!(result["subversion"].as_str().unwrap().contains("bitcrab"));
     assert_eq!(result["protocolversion"], 70016);
 }
