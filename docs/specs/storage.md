@@ -1,51 +1,57 @@
-# Storage Specification
+# Storage and Persistence Specification
 
-The Bitcrab storage engine is designed for high-performance blockchain persistence, mirroring the data layout of Bitcoin Core while utilizing a modern asynchronous architecture to prevent disk I/O from blocking network and consensus operations.
+Bitcrab's storage engine is designed for high-performance blockchain persistence, mirroring the data layout and indexing logic of Bitcoin Core while utilizing a modern asynchronous architecture to prevent disk I/O from blocking network operations.
 
-## Architecture: Hybrid Service Model
+## 🏛️ Bitcoin Core "Gold Standard" Reference
 
-Bitcrab utilizes a **Hybrid Service Architecture** that decouples data retrieval from data mutation.
+Bitcrab implements the standard Bitcoin Core storage hierarchy, which consists of two main components: flat-file block storage and a keyed metadata index.
+
+### 1. Raw Block Storage (`blk*.dat`)
+Blocks are stored in append-only files in the project's data directory. 
+- **File Format**: Linear sequences of block records.
+- **Record Structure**:
+    - `[Magic (4 bytes)]`: Network identifier (e.g., `0xF9BEB4D9` for Mainnet, `0x0A03CF40` for Signet).
+    - `[Size (4 bytes)]`: Length of the serialized block in Little-Endian.
+    - `[Block Data (N bytes)]`: The raw serialized Bitcoin block.
+
+### 2. Metadata Index (The "Block Index")
+A Key-Value database (LevelDB in Core, RocksDB in Bitcrab) that maps headers to their physical location and tracks validation state.
+- **Key Prefixes**:
+    - `b` + `[32-byte hash]`: Block index entry (height, status, file position).
+    - `C` + `[outpoint]`: Coin (UTXO) record.
+    - `B`: The hash of the current best chain tip.
+    - `l`: The file number of the last `blk*.dat` file written.
+
+---
+
+## 🦀 Bitcrab Implementation: Hybrid Service Model
+
+I have implemented this specification using a **Hybrid Service Architecture** that decouples data retrieval from data mutation.
 
 ### 1. Concurrent Read Handle (`Store`)
-The storage layer provides a thin, thread-safe handle that allows multiple node components to read data simultaneously.
-- **Direct Backend Access**: Reads from the block index and metadata are performed directly against the thread-safe database (RocksDB) or memory backend.
-- **Lock-Free Indexing**: Retrieval of block headers and metadata does not require synchronization with the write worker, eliminating mailbox latency for read-heavy operations (e.g., P2P header responses).
-- **Block File Reader**: Raw block data is read directly from disk via a dedicated reader component, allowing concurrent access to multiple `blk*.dat` files.
+The storage layer provides a thread-safe handle that allows multiple components (RPC, PeerManager, Sync) to read data simultaneously.
+- **Lock-Free Indexing**: Reads from RocksDB are performed directly against the backend.
+- **Parallel Disk Access**: Multiple `blk*.dat` files can be read in parallel by different threads without worker mediation.
 
-### 2. Sequential Write Worker
-All mutations to the blockchain state and physical files are orchestrated by a single-threaded background worker.
-- **Ordered Mutations**: Ensures that block storage, undo data, and index updates happen in a guaranteed sequential order.
-- **Async Write Proxies**: Calls like `store_block` and `store_header` are asynchronous; they send messages to the worker and await a response via optimized channels.
-- **File Rotation & Integrity**: The worker exclusively manages `blk*.dat` file rotation, pre-allocation, and `fsync` operations to ensure data integrity even during system failures.
+### 2. Sequential Write Actor (`StorageWorker`)
+All disk mutations and database writes are orchestrated by a single-threaded background actor.
+- **Ordered Operations**: I ensure that block storage and index updates are atomic and sequential.
+- **Async Communication**: Components send `WriteMessage` requests via `mpsc` channels and receive results through `oneshot` replies.
 
-## Data Layout
+### Storage Data Flow
+```mermaid
+graph LR
+    A[P2P/RPC/Sync] -->|Read| B(Store Handle)
+    B -->|Direct Query| C[(RocksDB Index)]
+    B -->|Direct Read| D[(blk*.dat Files)]
+    
+    A -->|Write Message| E[StorageWorker Actor]
+    E -->|Write & Commit| C
+    E -->|Append| D
+```
 
-Bitcrab maintains 100% byte-for-byte compatibility with Bitcoin Core's physical data layout.
+## 🛠️ Performance Optimizations
 
-### Raw Block Storage (`blk*.dat`)
-Blocks are stored in append-only flat files within the `blocks/` directory.
-- **Record Format**: `[magic (4 bytes)] [size (4 bytes LE)] [data (size bytes)]`
-- **File Rotation**: New files are created when the current file exceeds `MAX_BLOCK_FILE_SIZE` (default 128MB).
-- **Pre-allocation**: Disk space is pre-allocated in chunks to minimize filesystem fragmentation.
-
-### Undo Data (`rev*.dat`)
-Stores the data necessary to "unspend" transactions when a block is disconnected from the main chain.
-- Follows the same record format and rotation logic as block files.
-
-## Database Schema (Metadata Index)
-
-The metadata and UTXO set are stored in RocksDB using the following table structure:
-
-| Table Name | Key Prefix | Meaning |
-| :--- | :--- | :--- |
-| `block_index` | `'b' + hash` | Block metadata, height, and file position (`FlatFilePos`). |
-| `utxos` | `'C' + outpoint` | Unspent transaction outputs (Coins). |
-| `utxos` | `'B'` | Hash of the current best block (tip). |
-| `chain_meta` | `'l'` | Last block file number currently in use. |
-| `chain_meta` | `'R'` | Reindex flag (used during node recovery). |
-
-## Concurrency Model
-
-- **MPSC Channel**: Nodes send write requests to the storage worker via a multi-producer, single-consumer channel.
-- **Oneshot Replies**: The worker communicates the result of a write (including errors like disk-full) back to the caller via a unique oneshot channel.
-- **Arc-based Sharing**: The database backend and block reader are shared via `Arc`, allowing safe, multi-threaded access for synchronous read operations.
+1.  **RocksDB Integration**: I replaced the standard LevelDB with RocksDB to leverage its superior multi-threaded performance and compression support in Rust.
+2.  **Height-to-Hash Index**: In addition to standard Core prefixes, I implemented an `H` prefix (`H` + `BigEndian(Height)`) to enable instant block lookups by height for the JSON-RPC interface.
+3.  **FlatFilePos Manager**: I built a dedicated rotation manager that handles file pre-allocation and `fsync` strategies, ensuring that Bitcrab remains resilient against power failures and system crashes.
