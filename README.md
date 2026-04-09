@@ -11,23 +11,29 @@
 
 ---
 
-Bitcrab is a minimal, educational, yet production-inspired Bitcoin full node implementation. The project prioritizes readability, correctness, and a clean architecture that avoids the bloat found in legacy clients.
+Bitcrab is a minimal, educational, yet production-inspired Bitcoin full node implementation. The project prioritizes readability, correctness, and a clean architecture designed to address the inherent complexity of long-standing blockchain implementations.
 
-## 🧭 Philosophy
+## 🧭 Philosophy & Vision
 
-Many long-established clients accumulate bloat over time. This often occurs due to the need to support legacy features for existing users or through attempts to implement overly ambitious software. The result is often complex, difficult-to-maintain, and error-prone systems.
+Bitcrab is rooted in the **Cypherpunk** tradition. I believe that privacy, decentralization, and open-source transparency are non-negotiable for the future of money. By building an independent full node from scratch, Bitcrab empowers individuals to verify the network's state themselves, adhering to the core cypherpunk mantra: *"Cypherpunks write code."*
 
-In contrast, the philosophy behind Bitcrab is rooted in **simplicity**. I believe in writing minimal code, prioritizing clarity, and embracing simplicity in design. This approach is the best way to build a client that is both fast and resilient. By adhering to these principles, I can iterate fast and explore next-generation features early, ensuring the codebase remains a joy to work with.
+The development of Bitcrab is guided by three fundamental pillars:
+
+1.  **Simplicity Over Complexity**: The architecture is rooted in the pursuit of radical simplicity. By writing minimal code and prioritizing architectural clarity, Bitcrab achieves a level of resilience and performance that bloated systems struggle to maintain. This approach ensures the codebase remains accessible, robust, and future-proof.
+2.  **Client Diversity (Inspired by Ethereum)**: A robust blockchain requires multiple independent implementations to prevent systemic monoculture risks. Deeply influenced by the **Ethereum Vision**, Bitcrab strives to bring the same multi-client resilience to the Bitcoin ecosystem, ensuring the protocol remains defined by its universal specification rather than a single codebase.
+3.  **Future-Ready Research & Innovation**: Adhering to these principles of simplicity enables rapid iteration on next-generation features, such as **Post-Quantum (PQ) Signatures**. Bitcrab addresses the urgent need for cryptographic evolution, serving as an experimental bed to ensure Bitcoin's long-term survival against emerging quantum threats.
+
+Clarity and code readability are not just goals; they are the primary defenses against technical debt and systemic risk.
 
 ## 🎨 Design Principles
 
 - **Effortless Setup**: Ensure smooth execution across all target environments.
 - **Vertical Integration**: Maintain a minimal amount of dependencies.
 - **Extensible Structure**: Built in a way that makes it easy to add new layers (e.g., L2 integration, research VMs) on top.
-- **Simple Type System**: Avoid having generics leaking all over the codebase.
-- **Few Abstractions**: Do not generalize until strictly necessary. Repeating code twice is often better than a bad abstraction.
-- **Readability Over Optimization**: Maintainability is favored over premature and complex optimizations.
-- **Principled Concurrency**: Concurrency is utilized only where strictly necessary to maintain node performance, keeping the rest of the codebase easy to reason about.
+- **Simple Type System**: Avoid generics leaking across the codebase.
+- **Few Abstractions**: Do not generalize until strictly necessary. Clarity is prioritized over complex abstractions.
+- **Readability Over Optimization**: Maintainability is favored over premature optimizations.
+- **Principled Concurrency**: Concurrency is utilized only where essential to maintain performance, keeping the system logic easy to reason about.
 
 ## 🚀 Key Features
 
@@ -93,11 +99,12 @@ For a full list of commands, see [RPC Guide](docs/rpc.md).
 
 ## 📚 References and acknowledgements
 
-The following links, repositories, companies, and projects have been important in the development of Bitcrab. I have learned a lot from them, and I would like to thank and acknowledge them.
+The following links, repositories, companies, and projects have been essential inspirations for Bitcrab:
 
 - [Bitcoin Core](https://github.com/bitcoin/bitcoin) - The gold standard of Bitcoin implementations.
-- [Ethrex](https://github.com/lambdaclass/ethrex) - Inspiration for the architecture.
-- [Lambda Class](https://blog.lambdaclass.com/lambdas-engineering-philosophy/) - For their high-standard open-source and engineering philosophy.
+- [Ethereum Philosophy](https://ethereum.org/en/philosophy/) - For its commitment to decentralization and multi-client resilience.
+- [Ethrex](https://github.com/lambdaclass/ethrex) - A primary inspiration for our architecture and mission.
+- [Lambda Class](https://blog.lambdaclass.com/lambdas-engineering-philosophy/) - For their high-standard engineering philosophy.
 
 ## 📄 License
 
