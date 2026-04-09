@@ -2,6 +2,8 @@ use crate::rpc::{RpcApiContext, RpcHandler};
 use crate::utils::RpcErr;
 use serde::Serialize;
 use serde_json::{json, Value};
+use bitcrab_common::types::hash::BlockHash;
+use bitcrab_common::wire::decode::{BitcoinDecode, Decoder};
 
 pub struct GetBlockchainInfoRequest;
 
@@ -11,42 +13,26 @@ impl RpcHandler for GetBlockchainInfoRequest {
     }
 
     async fn handle(&self, context: RpcApiContext) -> Result<Value, RpcErr> {
-        let tip_hash = context
-            .store
-            .get_best_block()?
-            .unwrap_or_else(|| bitcrab_common::types::hash::BlockHash::zero());
+        let magic = context.peer_manager.magic;
+        
+        // Header tip
+        let tip_hash = context.store.get_best_block()?.unwrap_or_else(|| BlockHash::zero());
+        let header_height = context.store.get_block_index(&tip_hash)?.map(|i| i.height.0).unwrap_or(0);
 
-        let tip_index = context
-            .store
-            .get_block_index(&tip_hash)?
-            .unwrap_or_else(|| {
-                // Fallback for genesis
-                bitcrab_common::types::block::BlockIndex {
-                    header: bitcrab_common::types::block::BlockHeader {
-                        version: 1,
-                        prev_hash: bitcrab_common::types::hash::BlockHash::zero(),
-                        merkle_root: bitcrab_common::types::hash::Hash256::zero(),
-                        time: 0,
-                        bits: 0x1d00ffff,
-                        nonce: 0,
-                    },
-                    height: bitcrab_common::types::block::BlockHeight(0),
-                    file_pos: None,
-                    undo_pos: None,
-                }
-            });
+        // Block body tip
+        let block_hash = context.store.get_block_tip()?.unwrap_or_else(|| BlockHash::zero());
+        let block_height = context.store.get_block_index(&block_hash)?.map(|i| i.height.0).unwrap_or(0);
 
         let resp = GetBlockchainInfoResponse {
-            chain: "regtest".to_string(), // TODO: Detect from magic
-            blocks: tip_index.height.0,
-            headers: tip_index.height.0,
-            bestblockhash: tip_hash.to_string(),
+            chain: magic.to_string(), 
+            blocks: block_height,
+            headers: header_height,
+            bestblockhash: block_hash.to_string(),
             difficulty: 1.0,
-            mediantime: tip_index.header.time as u64,
-            verificationprogress: 1.0,
-            initialblockdownload: false,
-            chainwork: "0000000000000000000000000000000000000000000000000000000000000002"
-                .to_string(),
+            mediantime: 0, 
+            verificationprogress: (block_height as f64 / header_height.max(1) as f64).min(1.0),
+            initialblockdownload: block_height < header_height,
+            chainwork: "0".to_string(),
             size_on_disk: 0,
             pruned: false,
         };
@@ -55,7 +41,55 @@ impl RpcHandler for GetBlockchainInfoRequest {
     }
 }
 
-/// Response for getblockchaininfo
+pub struct GetBlockCountRequest;
+impl RpcHandler for GetBlockCountRequest {
+    fn parse(_params: &Option<Vec<Value>>) -> Result<Self, RpcErr> { Ok(Self) }
+    async fn handle(&self, context: RpcApiContext) -> Result<Value, RpcErr> {
+        let block_hash = context.store.get_block_tip()?.unwrap_or_else(|| BlockHash::zero());
+        let height = context.store.get_block_index(&block_hash)?.map(|i| i.height.0).unwrap_or(0);
+        Ok(json!(height))
+    }
+}
+
+pub struct GetBlockHashRequest { pub height: u32 }
+impl RpcHandler for GetBlockHashRequest {
+    fn parse(params: &Option<Vec<Value>>) -> Result<Self, RpcErr> {
+        let height = params.as_ref().and_then(|p| p.get(0)).and_then(|v| v.as_u64()).ok_or(RpcErr::MissingParam("height".into()))?;
+        Ok(Self { height: height as u32 })
+    }
+    async fn handle(&self, context: RpcApiContext) -> Result<Value, RpcErr> {
+        let hash = context.store.get_block_hash(self.height)?.ok_or_else(|| RpcErr::BadParams(format!("Height {} out of range", self.height)))?;
+        Ok(json!(hash.to_string()))
+    }
+}
+
+pub struct GetBlockRequest { pub hash: BlockHash }
+impl RpcHandler for GetBlockRequest {
+    fn parse(params: &Option<Vec<Value>>) -> Result<Self, RpcErr> {
+        let hash_str = params.as_ref().and_then(|p| p.get(0)).and_then(|v| v.as_str()).ok_or(RpcErr::MissingParam("hash".into()))?;
+        let hash = hash_str.parse().map_err(|_| RpcErr::BadParams("invalid hash format".into()))?;
+        Ok(Self { hash })
+    }
+    async fn handle(&self, context: RpcApiContext) -> Result<Value, RpcErr> {
+        let raw = context.store.get_block(&self.hash)?.ok_or_else(|| RpcErr::BadParams("block not found".into()))?;
+        let (block, _) = bitcrab_common::types::block::Block::decode(Decoder::new(&raw)).map_err(|e| RpcErr::Internal(format!("decode error: {}", e)))?;
+        
+        let txids: Vec<String> = block.transactions.iter().map(|tx| tx.txid().to_string()).collect();
+        
+        Ok(json!({
+            "hash": self.hash.to_string(),
+            "confirmations": 1,
+            "version": block.header.version,
+            "merkleroot": block.header.merkle_root.to_string(),
+            "tx": txids,
+            "time": block.header.time,
+            "nonce": block.header.nonce,
+            "bits": format!("{:08x}", block.header.bits),
+            "previousblockhash": block.header.prev_hash.to_string(),
+        }))
+    }
+}
+
 #[derive(Debug, Serialize)]
 pub struct GetBlockchainInfoResponse {
     pub chain: String,

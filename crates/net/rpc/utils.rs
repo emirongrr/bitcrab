@@ -97,15 +97,15 @@ impl RpcRequest {
     pub fn namespace(&self) -> Result<RpcNamespace, RpcErr> {
         // Bitcoin-style: methods like 'getblockchaininfo' don't have '_'
         // We will map based on string matches or prefixes
-        if self.method.contains("blockchain") {
+        let m = self.method.as_str();
+        if m.contains("blockchain") || m.contains("block") {
             Ok(RpcNamespace::Blockchain)
-        } else if self.method.contains("network")
-            || self.method.contains("peer")
-            || self.method.contains("connection")
+        } else if m.contains("network")
+            || m.contains("peer")
+            || m.contains("connection")
         {
             Ok(RpcNamespace::Net)
         } else {
-            // Defaulting to Net for now or checking other namespaces
             Ok(RpcNamespace::Net)
         }
     }

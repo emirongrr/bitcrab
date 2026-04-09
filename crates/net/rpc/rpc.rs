@@ -87,9 +87,12 @@ pub async fn map_blockchain_requests(
     req: &RpcRequest,
     context: RpcApiContext,
 ) -> Result<Value, RpcErr> {
-    use crate::blockchain::GetBlockchainInfoRequest;
+    use crate::blockchain::{GetBlockCountRequest, GetBlockHashRequest, GetBlockRequest, GetBlockchainInfoRequest};
     match req.method.as_str() {
         "getblockchaininfo" => GetBlockchainInfoRequest::call(req, context).await,
+        "getblockcount" => GetBlockCountRequest::call(req, context).await,
+        "getblockhash" => GetBlockHashRequest::call(req, context).await,
+        "getblock" => GetBlockRequest::call(req, context).await,
         _ => Err(RpcErr::MethodNotFound(req.method.clone())),
     }
 }

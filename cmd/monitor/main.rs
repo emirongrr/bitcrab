@@ -194,7 +194,14 @@ fn ui(f: &mut Frame, app: &App) {
     f.render_widget(header, chunks[0]);
 
     // 2. Stats
-    let height = app
+    let headers = app
+        .blockchain_info
+        .as_ref()
+        .and_then(|i| i.get("headers"))
+        .map(|v| v.to_string())
+        .unwrap_or_else(|| "0".to_string());
+
+    let blocks = app
         .blockchain_info
         .as_ref()
         .and_then(|i| i.get("blocks"))
@@ -219,9 +226,10 @@ fn ui(f: &mut Frame, app: &App) {
 
     let stats_text = vec![
         format!(" Network    : {}", network),
-        format!(" Height     : {}", height),
+        format!(" Headers    : {}", headers),
+        format!(" Blocks     : {}", blocks),
         format!(" Connections: {}", conn_count),
-        format!(" Best Block : {}", best_hash),
+        format!(" Block Tip : {}", if best_hash.len() > 20 { format!("{}...", &best_hash[..20]) } else { best_hash.to_string() }),
     ];
 
     let stats_list: Vec<ListItem> = stats_text
