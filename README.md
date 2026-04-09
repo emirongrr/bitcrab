@@ -15,7 +15,19 @@ Bitcrab is a minimal, educational, yet production-inspired Bitcoin full node imp
 
 ## 🧭 Philosophy & Vision
 
-Bitcrab is rooted in the **Cypherpunk** tradition. I believe that privacy, decentralization, and open-source transparency are non-negotiable for the future of money. By building an independent full node from scratch, Bitcrab empowers individuals to verify the network's state themselves, adhering to the core cypherpunk mantra: *"Cypherpunks write code."*
+Bitcrab is a manifestation of the **Cypherpunk** spirit in a world of increasing digital enclosure. We operate on the conviction that privacy, decentralization, and radical transparency are the only acceptable terms for the future of money. Bitcrab is not just a software client; it is an instrument of sovereignty, designed for those who refuse to trust and choose to verify.
+
+We are committed to the fundamental principles that define a truly decentralized system:
+
+- **Permissionless Openness**: Anyone, anywhere, should participate as an equal peer without seeking approval.
+- **Radical Decentralization**: Minimizing dependence on any single actor, ensuring the network survives even if its creators vanish.
+- **Censorship Resistance**: Stripping centralized entities of the power to interfere with individual sovereignty.
+- **Total Auditability**: Anyone must be able to validate the rules for themselves—the primary mission of running a full node.
+- **Credible Neutrality**: Building base-layer infrastructure that is demonstrably fair and transparent to all.
+- **Tools, Not Empires**: We build interoperable tools that empower users, rather than walled gardens that trap them.
+- **Cooperative Mindset**: Working together on shared research and libraries to create a positive-sum future for the entire ecosystem.
+
+By building an independent full node from the first line of code, Bitcrab empowers the individual to become their own ultimate authority. We adhere to the core cypherpunk mantra: **"Cypherpunks write code."**
 
 The development of Bitcrab is guided by three fundamental pillars:
 
@@ -24,6 +36,14 @@ The development of Bitcrab is guided by three fundamental pillars:
 3.  **Future-Ready Research & Innovation**: Adhering to these principles of simplicity enables rapid iteration on next-generation features, such as **Post-Quantum (PQ) Signatures**. Bitcrab addresses the urgent need for cryptographic evolution, serving as an experimental bed to ensure Bitcoin's long-term survival against emerging quantum threats.
 
 Clarity and code readability are not just goals; they are the primary defenses against technical debt and systemic risk.
+
+### 🧬 The Case for Evolution: Beyond the Era of Stasis
+
+Bitcoin is often praised for its immutability and the extreme difficulty of changing its core protocol. While this conservatism has protected the network’s integrity for over a decade, we believe the perception that Bitcoin *cannot* or *should not* change is a systemic risk. Evolution is not a violation of Bitcoin’s principles; it is a requirement for its survival.
+
+The primary catalyst for this shift will be the transition to the **Quantum Era**. The emergence of quantum computing represents an existential threshold that will demand more than just maintenance—it will demand a fundamental cryptographic transition. Bitcrab is founded on the conviction that Bitcoin must proactively prepare for this future. We serve as a research-first implementation designed to test **Post-Quantum (PQ) Signatures** and architectural upgrades, ensuring that when the pressure for change becomes inevitable, the community has a battle-tested path forward.
+
+---
 
 ## 🎨 Design Principles
 
@@ -105,6 +125,7 @@ The following links, repositories, companies, and projects have been essential i
 - [Ethereum Philosophy](https://ethereum.org/en/philosophy/) - For its commitment to decentralization and multi-client resilience.
 - [Ethrex](https://github.com/lambdaclass/ethrex) - A primary inspiration for our architecture and mission.
 - [Lambda Class](https://blog.lambdaclass.com/lambdas-engineering-philosophy/) - For their high-standard engineering philosophy.
+- [Vitalik Buterin](https://vitalik.eth.limo/general/2023/12/28/cypherpunk.html) - For defining the core cypherpunk values for the modern era.
 
 ## 📄 License
 
