@@ -1,7 +1,6 @@
 <div align="center">
   <img src="assets/banner.png" width="100%" alt="Bitcrab Epic Banner">
   <br>
-  <img src="assets/logo.png" width="160" height="160" alt="Bitcrab Logo">
   <h1>Bitcrab</h1>
   <p><strong>A High-Performance, Simplicity-Driven Bitcoin Full Node in Rust</strong></p>
 
