@@ -141,6 +141,35 @@ impl Store {
         Ok(Some(BlockHash::from_bytes(arr)))
     }
 
+    /// Retrieve a block hash by its height.
+    pub fn get_block_hash(&self, height: u32) -> Result<Option<BlockHash>, StoreError> {
+        let read = self.backend.begin_read()?;
+        
+        let mut key = Vec::with_capacity(5);
+        key.push(tables::PREFIX_HEIGHT);
+        key.extend_from_slice(&height.to_be_bytes());
+
+        let Some(bytes) = read.get(tables::CHAIN_META, &key)? else {
+            return Ok(None);
+        };
+
+        let mut arr = [0u8; 32];
+        arr.copy_from_slice(&bytes[..32]);
+        Ok(Some(BlockHash::from_bytes(arr)))
+    }
+
+    /// Retrieve the hash of the current highest downloaded full block.
+    pub fn get_block_tip(&self) -> Result<Option<BlockHash>, StoreError> {
+        let read = self.backend.begin_read()?;
+        let Some(bytes) = read.get(tables::UTXOS, &[tables::KEY_BLOCK_TIP])? else {
+            return Ok(None);
+        };
+
+        let mut arr = [0u8; 32];
+        arr.copy_from_slice(&bytes[..32]);
+        Ok(Some(BlockHash::from_bytes(arr)))
+    }
+
     /// Fetch a coin from the UTXO set by its outpoint.
     pub fn get_coin(
         &self,

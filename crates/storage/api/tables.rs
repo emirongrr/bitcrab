@@ -90,11 +90,11 @@ pub const PREFIX_BLOCK: u8 = b'b';
 /// Matches the `C` prefix in Bitcoin Core's chainstate LevelDB.
 pub const PREFIX_COIN: u8 = b'C';
 
-/// Key for the best block hash entry in [`UTXOS`].
-///
-/// Value: 32-byte block hash.
-/// Matches the `B` key in Bitcoin Core's chainstate LevelDB.
-pub const KEY_BEST_BLOCK: u8 = b'B';
+/// Key for the best block header hash in [`UTXOS`].
+pub const KEY_BEST_BLOCK: u8 = b'b';
+
+/// Key for the best full block hash (with body) in [`UTXOS`].
+pub const KEY_BLOCK_TIP: u8 = b'B';
 
 /// Key for the last block file number in [`CHAIN_META`].
 ///
@@ -114,3 +114,9 @@ pub const PREFIX_FLAG: u8 = b'F';
 /// Value: 1-byte boolean (0x01 = reindexing, 0x00 = normal).
 /// Matches the `R` key in Bitcoin Core's block index LevelDB.
 pub const KEY_REINDEX: u8 = b'R';
+
+/// Prefix for block height to hash mapping in [`CHAIN_META`].
+///
+/// Full key: `0x48` (H) + 4-byte big-endian height.
+/// Value: 32-byte block hash.
+pub const PREFIX_HEIGHT: u8 = b'H';

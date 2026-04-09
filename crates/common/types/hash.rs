@@ -8,6 +8,7 @@
 use ripemd::Ripemd160;
 use sha2::{Digest, Sha256};
 use std::fmt;
+use std::str::FromStr;
 
 // ---------------------------------------------------------------------------
 // Hash functions
@@ -80,6 +81,20 @@ impl fmt::Display for Hash256 {
     }
 }
 
+impl FromStr for Hash256 {
+    type Err = HashError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let mut bytes = [0u8; 32];
+        hex::decode_to_slice(s, &mut bytes).map_err(|_| HashError::InvalidHex {
+            context: "Hash256",
+            reason: "invalid hex string",
+        })?;
+        bytes.reverse();
+        Ok(Self(bytes))
+    }
+}
+
 // ---------------------------------------------------------------------------
 // BlockHash
 // ---------------------------------------------------------------------------
@@ -128,6 +143,20 @@ impl fmt::Display for BlockHash {
     }
 }
 
+impl FromStr for BlockHash {
+    type Err = HashError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let mut bytes = [0u8; 32];
+        hex::decode_to_slice(s, &mut bytes).map_err(|_| HashError::InvalidHex {
+            context: "BlockHash",
+            reason: "invalid hex string",
+        })?;
+        bytes.reverse();
+        Ok(Self(bytes))
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Txid
 // ---------------------------------------------------------------------------
@@ -173,6 +202,20 @@ impl fmt::Display for Txid {
         let mut r = self.0;
         r.reverse();
         write!(f, "{}", hex::encode(r))
+    }
+}
+
+impl FromStr for Txid {
+    type Err = HashError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let mut bytes = [0u8; 32];
+        hex::decode_to_slice(s, &mut bytes).map_err(|_| HashError::InvalidHex {
+            context: "Txid",
+            reason: "invalid hex string",
+        })?;
+        bytes.reverse();
+        Ok(Self(bytes))
     }
 }
 

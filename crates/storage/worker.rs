@@ -149,6 +149,12 @@ impl StorageWorker {
             write.put(tables::UTXOS, &[tables::KEY_BEST_BLOCK], hash.as_bytes())?;
         }
 
+        // Index by height: H + 4-byte big-endian height -> 32-byte hash
+        let mut height_key = Vec::with_capacity(5);
+        height_key.push(tables::PREFIX_HEIGHT);
+        height_key.extend_from_slice(&height.0.to_be_bytes());
+        write.put(tables::CHAIN_META, &height_key, hash.as_bytes())?;
+
         write.commit()
     }
 
@@ -187,6 +193,15 @@ impl StorageWorker {
             &[tables::KEY_LAST_FILE],
             &last_file.to_le_bytes(),
         )?;
+
+        // 4. Index by height
+        let mut height_key = Vec::with_capacity(5);
+        height_key.push(tables::PREFIX_HEIGHT);
+        height_key.extend_from_slice(&height.0.to_be_bytes());
+        write.put(tables::CHAIN_META, &height_key, hash.as_bytes())?;
+
+        // 5. Update best full block (Block Tip)
+        write.put(tables::UTXOS, &[tables::KEY_BLOCK_TIP], hash.as_bytes())?;
 
         write.commit()?;
 
