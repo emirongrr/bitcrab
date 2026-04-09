@@ -25,6 +25,8 @@ pub enum BlockDownloadMessage {
     DownloadBlocks(Vec<[u8; 32]>),
     /// Process incoming block body.
     BlockReceived(PeerHandle, bitcrab_common::types::block::Block),
+    /// A new peer is available.
+    PeerConnected(PeerHandle),
     /// Periodic check for timeouts and queue processing.
     Maintenance,
 }
@@ -50,7 +52,6 @@ impl BlockDownloadActor {
         }
     }
 
-    /// Attach a listener for block connectivity events.
     pub fn with_notifier(
         mut self,
         tx: tokio::sync::mpsc::Sender<(BlockHash, bitcrab_common::types::block::BlockHeight)>,
@@ -60,37 +61,31 @@ impl BlockDownloadActor {
     }
 
     async fn process_queue(&mut self) {
+        // If queue is empty, try to populate it from storage (Backward Sync)
+        if self.queue.is_empty() && self.in_flight.is_empty() {
+             self.populate_queue_from_store().await;
+        }
+
         if self.queue.is_empty() {
             return;
         }
 
-        // Parallel download logic:
         let Ok(peers) = self.peer_table.get_peers().await else {
             return;
         };
-
         if peers.is_empty() {
             return;
         }
 
         let mut peer_idx = 0;
-        // Limit in-flight requests to prevent overwhelming peers/memory.
         while !self.queue.is_empty() && self.in_flight.len() < 128 {
             let hash = self.queue.remove(0);
-
-            // Basic duplication check
             if self.in_flight.contains_key(&hash) {
                 continue;
             }
 
             let peer = &peers[peer_idx % peers.len()];
             peer_idx += 1;
-
-            debug!(
-                "[blocks] requesting block {} from {}",
-                hex::encode(hash),
-                peer.addr
-            );
 
             let getdata = GetData {
                 inventory: vec![InvVector {
@@ -107,6 +102,29 @@ impl BlockDownloadActor {
         }
     }
 
+    /// Look for headers that don't have a corresponding block body.
+    async fn populate_queue_from_store(&mut self) {
+        let Ok(Some(block_tip)) = self.store.get_block_tip() else {
+             // If no blocks at all, start from GENESIS + 1
+             self.fetch_next_batch(0).await;
+             return;
+        };
+
+        let Ok(Some(idx)) = self.store.get_block_index(&block_tip) else { return; };
+        self.fetch_next_batch(idx.height.0).await;
+    }
+
+    async fn fetch_next_batch(&mut self, start_height: u32) {
+        debug!("[blocks] pulling missing block hashes starting from height {}", start_height + 1);
+        for h in (start_height + 1)..(start_height + 512) {
+            if let Ok(Some(hash)) = self.store.get_block_hash(h) {
+                self.queue.push(hash.as_bytes().to_owned());
+            } else {
+                break;
+            }
+        }
+    }
+
     async fn handle_block(
         &mut self,
         peer: PeerHandle,
@@ -118,35 +136,16 @@ impl BlockDownloadActor {
         if self.in_flight.remove(hash_bytes.as_slice()).is_some() {
             info!("[blocks] received block {} from {}", hash, peer.addr);
 
-            // 1. Fetch height from index (must have been stored by HeaderSyncActor first)
             let height = match self.store.get_block_index(&hash) {
                 Ok(Some(idx)) => idx.height,
-                _ => {
-                    debug!(
-                        "[blocks] ignoring block body without indexed header: {}",
-                        hash
-                    );
-                    return Ok(());
-                }
+                _ => return Ok(()),
             };
 
-            // 2. Persist full block to disk
-            // Note: Bitcoin Core stores blocks in blk*.dat files.
-            // We use tokio::task::spawn_blocking internally in store.store_block.
             let raw_block = block.encode_message();
-
-            if let Err(e) = self
-                .store
-                .store_block(block.header, height, raw_block)
-                .await
-            {
+            if let Err(e) = self.store.store_block(block.header, height, raw_block).await {
                 warn!("[blocks] failed to persist block {}: {}", hash, e);
             } else {
-                METRICS
-                    .total_blocks_downloaded
-                    .fetch_add(1, Ordering::Relaxed);
-
-                // Notify consensus engine if a listener is attached
+                METRICS.total_blocks_downloaded.fetch_add(1, Ordering::Relaxed);
                 if let Some(ref tx) = self.on_block_available {
                     let _ = tx.send((hash, height)).await;
                 }
@@ -158,14 +157,7 @@ impl BlockDownloadActor {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-trait BlockExt {
-    fn encode_message(&self) -> Vec<u8>;
-}
-
+trait BlockExt { fn encode_message(&self) -> Vec<u8>; }
 impl BlockExt for bitcrab_common::types::block::Block {
     fn encode_message(&self) -> Vec<u8> {
         use bitcrab_common::wire::encode::Encoder;
@@ -208,24 +200,19 @@ impl Actor for BlockDownloadActor {
                 BlockDownloadMessage::BlockReceived(peer, block) => {
                     let _ = self.handle_block(peer, block).await;
                 }
+                BlockDownloadMessage::PeerConnected(_) => {
+                    self.process_queue().await;
+                }
                 BlockDownloadMessage::Maintenance => {
                     let now = Instant::now();
-                    let timed_out: Vec<_> = self
-                        .in_flight
-                        .iter()
-                        .filter(|(_, (_, start))| {
-                            now.duration_since(*start) > Duration::from_secs(60)
-                        })
+                    let timed_out: Vec<_> = self.in_flight.iter()
+                        .filter(|(_, (_, start))| now.duration_since(*start) > Duration::from_secs(60))
                         .map(|(hash, _)| *hash)
                         .collect();
 
                     for hash in timed_out {
-                        if let Some((peer, _)) = self.in_flight.remove(&hash) {
-                            warn!(
-                                "[blocks] block {} timed out from {}",
-                                hex::encode(hash),
-                                peer.addr
-                            );
+                        if let Some((p, _)) = self.in_flight.remove(&hash) {
+                            warn!("[blocks] block {} timed out from {}", hex::encode(hash), p.addr);
                             self.queue.push(hash);
                         }
                     }

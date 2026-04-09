@@ -33,7 +33,7 @@ const HANDSHAKE_TIMEOUT_SECS: u64 = 30;
 /// Bitcoin Core: CConnman in src/net.h
 pub struct PeerManager {
     pub table: PeerTable,
-    magic: Magic,
+    pub magic: Magic,
     pub dispatcher: ActorRef<DispatchMessage>,
     pub addr_man: Arc<Mutex<AddrMan>>,
     our_nonces: Arc<Mutex<HashSet<u64>>>,
@@ -256,7 +256,18 @@ impl PeerManager {
                     .await
                     .map_err(|_| P2pError::ConnectionClosed)?;
 
-                let msg_hdr = decode_header(&hdr_buf, magic)?;
+                let msg_hdr = match decode_header(&hdr_buf, magic) {
+                    Ok(hdr) => hdr,
+                    Err(e) => {
+                        if let crate::p2p::errors::P2pError::WrongMagic { expected, actual } = e {
+                            warn!(
+                                "[{}] Magic mismatch! Expected: {:08x}, Received: {:08x}",
+                                addr, expected, actual
+                            );
+                        }
+                        return Err(e);
+                    }
+                };
                 debug!("[{}] received {:?}", addr, msg_hdr.command);
 
                 let mut payload_buf = vec![0u8; msg_hdr.length as usize];

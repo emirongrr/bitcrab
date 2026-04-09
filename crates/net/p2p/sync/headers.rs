@@ -5,12 +5,13 @@ use tokio::time::{interval, Duration};
 use tracing::{debug, info, warn};
 
 use crate::p2p::{
-    actor::{Actor, ActorError, Context},
+    actor::{Actor, ActorError, ActorRef, Context},
     messages::{getheaders::GetHeaders, headers::Headers, Message},
     metrics::METRICS,
     peer::PeerHandle,
     peer_table::PeerTable,
 };
+use crate::p2p::sync::blocks::BlockDownloadMessage;
 use bitcrab_common::types::{block::BlockHeight, hash::BlockHash};
 use bitcrab_storage::Store;
 
@@ -27,16 +28,18 @@ pub struct HeaderSyncActor {
     store: Store,
     peer_table: PeerTable,
     sync_peer: Option<PeerHandle>,
+    block_download: ActorRef<BlockDownloadMessage>,
     /// Optimization: local cache for the current best hash to avoid redundant storage reads.
     last_known_tip: Option<BlockHash>,
 }
 
 impl HeaderSyncActor {
-    pub fn new(store: Store, peer_table: PeerTable) -> Self {
+    pub fn new(store: Store, peer_table: PeerTable, block_download: ActorRef<BlockDownloadMessage>) -> Self {
         Self {
             store,
             peer_table,
             sync_peer: None,
+            block_download,
             last_known_tip: None,
         }
     }
@@ -102,6 +105,8 @@ impl HeaderSyncActor {
             _ => BlockHeight::GENESIS,
         };
 
+        let mut stored_hashes = Vec::with_capacity(count);
+
         for (i, header) in headers_msg.headers.iter().enumerate() {
             // 1. Basic Consensus Validation: Proof of Work check.
             if !header.meets_target() {
@@ -110,13 +115,11 @@ impl HeaderSyncActor {
                     peer.addr,
                     header.block_hash()
                 );
-                // TODO: Penalize peer
                 return Ok(());
             }
 
-            // 2. Continuity check (optional but recommended): prev_hash should match our current tip.
-            // (Skipping complex chain reorg logic for now, assuming sequential sync).
-
+            let hash = header.block_hash();
+            
             // 3. Store header.
             let is_best = i == count - 1;
             if let Err(e) = self
@@ -126,14 +129,18 @@ impl HeaderSyncActor {
             {
                 warn!(
                     "[headers] failed to store header {}: {}",
-                    header.block_hash(),
+                    hash,
                     e
                 );
                 return Ok(());
             }
 
+            stored_hashes.push(hash.as_bytes().to_owned());
             current_height = current_height.next();
         }
+
+        // TRIGGER BLOCK DOWNLOAD
+        let _ = self.block_download.cast(BlockDownloadMessage::DownloadBlocks(stored_hashes)).await;
 
         // Update local cache and metrics.
         if let Some(last) = headers_msg.headers.last() {

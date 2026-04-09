@@ -17,6 +17,7 @@ use bitcrab_net::p2p::{
     sync::{SyncManager, HeaderSyncMessage},
     network::{run_p2p_maintenance, NetworkConfig},
     actor::Actor,
+    initiator::ConnectionInitiator,
 };
 use bitcrab_storage::Store;
 
@@ -45,7 +46,7 @@ pub fn init_p2p(
     let dispatcher = DispatcherActor::new(table.clone(), sync.clone()).spawn();
     
     // 4. Peer Management
-    let peer_manager = Arc::new(PeerManager::new(magic, table, dispatcher).with_sync(sync.clone()));
+    let peer_manager = Arc::new(PeerManager::new(magic, table.clone(), dispatcher).with_sync(sync.clone()));
 
     // 5. P2P Maintenance Task
     let p2p_manager = Arc::clone(&peer_manager);
@@ -68,6 +69,12 @@ pub fn init_p2p(
             }
         }
     });
+
+    // 6. Active Connection Initiator (Target: 8 outbound peers)
+    let initiator_manager = Arc::clone(&peer_manager);
+    let initiator = ConnectionInitiator::new(table, initiator_manager, 8);
+    let _initiator_handle = initiator.spawn();
+    info!("[init] started connection initiator (target: 8)");
 
     // 6. Optimization: Trigger immediate header sync when first peer connects
     // This is handled by the HeaderSyncActor's maintenance loop, but we could trigger it pro-actively here

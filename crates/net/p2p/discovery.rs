@@ -97,7 +97,7 @@ impl Actor for DiscoveryActor {
 
             // Start periodic maintenance timer
             tokio::spawn(async move {
-                let mut interval = interval(Duration::from_secs(3600)); // Every hour
+                let mut interval = interval(Duration::from_secs(120)); // Check every 2 minutes
                 loop {
                     interval.tick().await;
                     let _ = handle.cast(DiscoveryMessage::Maintenance).await;
@@ -114,8 +114,14 @@ impl Actor for DiscoveryActor {
     ) -> impl std::future::Future<Output = Result<(), ActorError>> + Send {
         async move {
             match msg {
-                DiscoveryMessage::SeedNow | DiscoveryMessage::Maintenance => {
+                DiscoveryMessage::SeedNow => {
                     self.seed_from_dns().await;
+                }
+                DiscoveryMessage::Maintenance => {
+                    let count = self.peer_table.get_peer_count().await.unwrap_or(0);
+                    if count < 100 { // If we have fewer than 100 known addresses
+                        self.seed_from_dns().await;
+                    }
                 }
             }
             Ok(())

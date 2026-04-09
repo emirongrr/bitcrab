@@ -27,19 +27,23 @@ impl SyncManager {
             )>,
         >,
     ) -> Self {
-        let headers = HeaderSyncActor::new(store.clone(), peer_table.clone()).spawn();
-
-        let mut block_actor = BlockDownloadActor::new(store, peer_table);
+        // 1. Create BlockDownloadActor first so headers can refer to it
+        let mut block_actor = BlockDownloadActor::new(store.clone(), peer_table.clone());
         if let Some(tx) = notifier {
             block_actor = block_actor.with_notifier(tx);
         }
         let blocks = block_actor.spawn();
+
+        // 2. Create HeaderSyncActor with a reference to the block actor
+        let headers = HeaderSyncActor::new(store, peer_table, blocks.clone()).spawn();
 
         Self { headers, blocks }
     }
 
     /// Notify the sync system that a new peer is available and ready for protocol messages.
     pub async fn notify_peer_connected(&self, peer: crate::p2p::peer::PeerHandle) {
-        let _ = self.headers.cast(HeaderSyncMessage::PeerConnected(peer)).await;
+        let _ = self.headers.cast(HeaderSyncMessage::PeerConnected(peer.clone())).await;
+        // CRITICAL FIX: Also notify block downloader about the new peer
+        let _ = self.blocks.cast(BlockDownloadMessage::PeerConnected(peer)).await;
     }
 }
