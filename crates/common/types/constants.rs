@@ -186,7 +186,7 @@ pub const PROTOCOL_VERSION: i32 = 70_015;
 pub const SERVICES: u64 = 0x09;
 
 /// Default user agent string for Bitcrab.
-pub const USER_AGENT: &'static str = "/bitcrab:0.1.0/";
+pub const USER_AGENT: &str = "/bitcrab:0.1.0/";
 
 /// Minimum P2P protocol version we will connect to.
 ///
@@ -198,11 +198,10 @@ pub const MIN_PEER_PROTO_VERSION: u32 = 31_800;
 /// Bitcoin Core: `MAX_HEADERS_RESULTS = 2000` in `src/net_processing.cpp`
 pub const MAX_HEADERS_PER_MSG: usize = 2_000;
 
-/// Maximum P2P message payload size (32 MB).
+/// Maximum P2P message payload size.
 ///
 /// Bitcoin Core: `MAX_PROTOCOL_MESSAGE_LENGTH = 4 * 1024 * 1024`
-/// Note: Bitcoin Core uses 4 MB; we use 32 MB to match current practice.
-pub const MAX_MESSAGE_SIZE: usize = 32 * 1024 * 1024;
+pub const MAX_MESSAGE_SIZE: usize = 4 * 1024 * 1024;
 
 // ---------------------------------------------------------------------------
 // Tests — constants must be self-consistent

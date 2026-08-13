@@ -27,7 +27,10 @@ pub trait StorageReadView: Send + Sync {
     ) -> Result<Box<dyn Iterator<Item = PrefixResult> + '_>, StoreError>;
 }
 
-pub trait StorageWriteBatch: Send + Sync {
+/// A write batch is owned and committed by the sequential storage worker.
+///
+/// It may move between worker polls, but it is never shared concurrently.
+pub trait StorageWriteBatch: Send {
     fn put(&mut self, table: &'static str, key: &[u8], value: &[u8]) -> Result<(), StoreError> {
         self.put_batch(table, vec![(key.to_vec(), value.to_vec())])
     }

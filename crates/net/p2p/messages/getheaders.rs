@@ -66,7 +66,7 @@ impl BitcoinMessage for GetHeaders {
             dec = d;
         }
         let (stop, dec) = dec.read_array::<32>("stop_hash")?;
-        dec.finish_unchecked();
+        dec.finish("getheaders")?;
         Ok(Self {
             version,
             locator,

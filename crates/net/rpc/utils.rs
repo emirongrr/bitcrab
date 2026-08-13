@@ -1,8 +1,5 @@
 //! Utility types and error handling for JSON-RPC.
-//!
-//! Matches Bitcoin Core and Ethrex patterns for error mapping and namespace resolution.
 
-use bitcrab_storage::error::StoreError;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -62,12 +59,6 @@ impl From<RpcErr> for RpcErrorMetadata {
     }
 }
 
-impl From<StoreError> for RpcErr {
-    fn from(value: StoreError) -> Self {
-        RpcErr::Internal(value.to_string())
-    }
-}
-
 /// JSON-RPC method namespace.
 pub enum RpcNamespace {
     Blockchain,
@@ -100,11 +91,6 @@ impl RpcRequest {
         let m = self.method.as_str();
         if m.contains("blockchain") || m.contains("block") {
             Ok(RpcNamespace::Blockchain)
-        } else if m.contains("network")
-            || m.contains("peer")
-            || m.contains("connection")
-        {
-            Ok(RpcNamespace::Net)
         } else {
             Ok(RpcNamespace::Net)
         }

@@ -23,6 +23,24 @@ pub enum DecodeError {
     #[error("truncated varint reading '{field}'")]
     TruncatedVarint { field: &'static str },
 
+    /// A CompactSize integer used a longer-than-necessary encoding.
+    #[error(
+        "non-canonical varint in field '{field}': value {value} encoded in {encoded_len} bytes"
+    )]
+    NonCanonicalVarint {
+        field: &'static str,
+        value: u64,
+        encoded_len: usize,
+    },
+
+    /// A length prefix requested an allocation above the configured limit.
+    #[error("field '{field}' length {len} exceeds allocation limit {limit}")]
+    AllocationTooLarge {
+        field: &'static str,
+        len: u64,
+        limit: usize,
+    },
+
     /// A string field contained invalid UTF-8.
     #[error("invalid UTF-8 in field '{field}'")]
     InvalidUtf8 { field: &'static str },
@@ -54,6 +72,16 @@ impl DecodeError {
                 available,
             },
             DecodeError::TruncatedVarint { .. } => DecodeError::TruncatedVarint { field },
+            DecodeError::NonCanonicalVarint {
+                value, encoded_len, ..
+            } => DecodeError::NonCanonicalVarint {
+                field,
+                value,
+                encoded_len,
+            },
+            DecodeError::AllocationTooLarge { len, limit, .. } => {
+                DecodeError::AllocationTooLarge { field, len, limit }
+            }
             DecodeError::InvalidUtf8 { .. } => DecodeError::InvalidUtf8 { field },
             DecodeError::InvalidValue { value, .. } => DecodeError::InvalidValue { field, value },
             other => other, // TrailingBytes ve Custom değişmeden kalır

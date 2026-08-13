@@ -10,7 +10,17 @@ use rocksdb::{
 use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Arc;
-use tracing::{info, warn};
+use tracing::warn;
+
+// Bitcoin Core keeps the database-engine caches deliberately small and gives
+// most of the memory budget to its application-level UTXO cache. RocksDB needs
+// somewhat more headroom than LevelDB for multiple column families, but these
+// defaults must remain safe on ordinary node hardware.
+const BLOCK_CACHE_BYTES: usize = 64 * 1024 * 1024;
+const DB_WRITE_BUFFER_BYTES: usize = 32 * 1024 * 1024;
+const BLOCK_INDEX_WRITE_BUFFER_BYTES: usize = 8 * 1024 * 1024;
+const UTXO_WRITE_BUFFER_BYTES: usize = 32 * 1024 * 1024;
+const META_WRITE_BUFFER_BYTES: usize = 2 * 1024 * 1024;
 
 /// RocksDB storage backend for production use.
 ///
@@ -33,29 +43,29 @@ impl RocksDBBackend {
         opts.create_if_missing(true);
         opts.create_missing_column_families(true);
 
-        opts.set_max_open_files(-1);
-        opts.set_max_file_opening_threads(16);
-        opts.set_max_background_jobs(8);
+        opts.set_max_open_files(512);
+        opts.set_max_file_opening_threads(4);
+        opts.set_max_background_jobs(4);
 
         opts.set_level_zero_file_num_compaction_trigger(2);
         opts.set_level_zero_slowdown_writes_trigger(10);
         opts.set_level_zero_stop_writes_trigger(16);
-        opts.set_target_file_size_base(512 * 1024 * 1024); // 512MB
-        opts.set_max_bytes_for_level_base(2 * 1024 * 1024 * 1024); // 2GB L1
+        opts.set_target_file_size_base(64 * 1024 * 1024);
+        opts.set_max_bytes_for_level_base(256 * 1024 * 1024);
         opts.set_max_bytes_for_level_multiplier(10.0);
         opts.set_level_compaction_dynamic_level_bytes(true);
 
-        opts.set_db_write_buffer_size(1024 * 1024 * 1024); // 1GB
-        opts.set_write_buffer_size(128 * 1024 * 1024); // 128MB
-        opts.set_max_write_buffer_number(4);
-        opts.set_min_write_buffer_number_to_merge(2);
+        opts.set_db_write_buffer_size(DB_WRITE_BUFFER_BYTES);
+        opts.set_write_buffer_size(DB_WRITE_BUFFER_BYTES);
+        opts.set_max_write_buffer_number(3);
+        opts.set_min_write_buffer_number_to_merge(1);
 
         // Point-in-time recovery ensures the WAL is replayed consistently
         // after an unclean shutdown.
         opts.set_wal_recovery_mode(rocksdb::DBRecoveryMode::PointInTime);
-        opts.set_max_total_wal_size(2 * 1024 * 1024 * 1024); // 2GB
-        opts.set_wal_bytes_per_sync(32 * 1024 * 1024); // 32MB
-        opts.set_bytes_per_sync(32 * 1024 * 1024); // 32MB
+        opts.set_max_total_wal_size(256 * 1024 * 1024);
+        opts.set_wal_bytes_per_sync(4 * 1024 * 1024);
+        opts.set_bytes_per_sync(4 * 1024 * 1024);
         opts.set_use_fsync(false); // fdatasync is sufficient
 
         opts.set_enable_pipelined_write(true);
@@ -74,7 +84,7 @@ impl RocksDBBackend {
 
         // Shared LRU block cache across all column families to avoid
         // per-CF cache fragmentation under concurrent read workloads.
-        let block_cache = Cache::new_lru_cache(4 * 1024 * 1024 * 1024); // 4GB
+        let block_cache = Cache::new_lru_cache(BLOCK_CACHE_BYTES);
 
         let mut cf_descriptors = Vec::new();
         for cf_name in &all_cfs_to_open {
@@ -91,9 +101,9 @@ impl RocksDBBackend {
                 // are already compact (serialized CBlockIndex, ~100 bytes).
                 BLOCK_INDEX => {
                     cf_opts.set_compression_type(rocksdb::DBCompressionType::None);
-                    cf_opts.set_write_buffer_size(64 * 1024 * 1024); // 64MB
-                    cf_opts.set_max_write_buffer_number(3);
-                    cf_opts.set_target_file_size_base(128 * 1024 * 1024); // 128MB
+                    cf_opts.set_write_buffer_size(BLOCK_INDEX_WRITE_BUFFER_BYTES);
+                    cf_opts.set_max_write_buffer_number(2);
+                    cf_opts.set_target_file_size_base(32 * 1024 * 1024);
 
                     let mut block_opts = BlockBasedOptions::default();
                     block_opts.set_block_size(16 * 1024); // 16KB
@@ -111,10 +121,10 @@ impl RocksDBBackend {
                 // entropy-dense (scripts, amounts).
                 UTXOS => {
                     cf_opts.set_compression_type(rocksdb::DBCompressionType::None);
-                    cf_opts.set_write_buffer_size(256 * 1024 * 1024); // 256MB
-                    cf_opts.set_max_write_buffer_number(6);
-                    cf_opts.set_min_write_buffer_number_to_merge(2);
-                    cf_opts.set_target_file_size_base(256 * 1024 * 1024); // 256MB
+                    cf_opts.set_write_buffer_size(UTXO_WRITE_BUFFER_BYTES);
+                    cf_opts.set_max_write_buffer_number(3);
+                    cf_opts.set_min_write_buffer_number_to_merge(1);
+                    cf_opts.set_target_file_size_base(64 * 1024 * 1024);
                     cf_opts.set_memtable_prefix_bloom_ratio(0.1);
 
                     let mut block_opts = BlockBasedOptions::default();
@@ -129,7 +139,7 @@ impl RocksDBBackend {
                 // number, feature flags). Default settings are sufficient.
                 CHAIN_META => {
                     cf_opts.set_compression_type(rocksdb::DBCompressionType::None);
-                    cf_opts.set_write_buffer_size(4 * 1024 * 1024); // 4MB
+                    cf_opts.set_write_buffer_size(META_WRITE_BUFFER_BYTES);
                     cf_opts.set_max_write_buffer_number(2);
                     cf_opts.set_target_file_size_base(8 * 1024 * 1024); // 8MB
 
@@ -139,13 +149,13 @@ impl RocksDBBackend {
                     cf_opts.set_block_based_table_factory(&block_opts);
                 }
 
-                // Unknown column families from older schema versions.
-                // Conservative defaults — they will be dropped after open.
+                // Unknown column families from another schema version.
+                // Open and preserve them with conservative defaults.
                 _ => {
                     cf_opts.set_compression_type(rocksdb::DBCompressionType::None);
-                    cf_opts.set_write_buffer_size(64 * 1024 * 1024); // 64MB
-                    cf_opts.set_max_write_buffer_number(3);
-                    cf_opts.set_target_file_size_base(128 * 1024 * 1024); // 128MB
+                    cf_opts.set_write_buffer_size(BLOCK_INDEX_WRITE_BUFFER_BYTES);
+                    cf_opts.set_max_write_buffer_number(2);
+                    cf_opts.set_target_file_size_base(32 * 1024 * 1024);
 
                     let mut block_opts = BlockBasedOptions::default();
                     block_opts.set_block_size(16 * 1024);
@@ -164,16 +174,12 @@ impl RocksDBBackend {
         )
         .map_err(|e| StoreError::Custom(format!("failed to open RocksDB: {e}")))?;
 
-        // Drop column families that were present on disk but are no longer
-        // defined in TABLES. This keeps the on-disk layout in sync with the
-        // current schema after migrations.
+        // Unknown column families may belong to a newer or optional schema.
+        // Preserve them until an explicit, versioned migration decides what
+        // to do. Silently dropping persisted data during startup is unsafe.
         for cf_name in &existing_cfs {
             if cf_name != "default" && !TABLES.contains(&cf_name.as_str()) {
-                warn!("dropping obsolete column family: {cf_name}");
-                let _ = db
-                    .drop_cf(cf_name)
-                    .inspect(|_| info!("dropped column family: {cf_name}"))
-                    .inspect_err(|e| warn!("failed to drop column family '{cf_name}': {e}"));
+                warn!("preserving unknown column family pending explicit migration: {cf_name}");
             }
         }
 
@@ -305,10 +311,6 @@ pub struct RocksDBWriteTx {
     db: Arc<DBWithThreadMode<MultiThreaded>>,
     batch: WriteBatch,
 }
-
-// WriteBatch is not Send by default in some rocksdb crate versions.
-unsafe impl Send for RocksDBWriteTx {}
-unsafe impl Sync for RocksDBWriteTx {}
 
 impl StorageWriteBatch for RocksDBWriteTx {
     fn put(&mut self, table: &'static str, key: &[u8], value: &[u8]) -> Result<(), StoreError> {

@@ -11,12 +11,7 @@ impl RpcHandler for GetNetworkInfoRequest {
     }
 
     async fn handle(&self, context: RpcApiContext) -> Result<Value, RpcErr> {
-        let connections = context
-            .peer_manager
-            .table
-            .get_peer_count()
-            .await
-            .unwrap_or(0);
+        let counts = context.p2p.peer_table.get_connection_counts().await;
 
         let resp = GetNetworkInfoResponse {
             version: 260000,
@@ -26,7 +21,9 @@ impl RpcHandler for GetNetworkInfoRequest {
             localrelay: true,
             timeoffset: 0,
             networkactive: true,
-            connections,
+            connections: counts.total(),
+            connections_in: counts.inbound,
+            connections_out: counts.outbound_full_relay + counts.block_relay_only + counts.feeler,
             networks: vec![],
             relayfee: 0.00001000,
             incrementalfee: 0.00001000,
@@ -45,30 +42,25 @@ impl RpcHandler for GetPeerInfoRequest {
     }
 
     async fn handle(&self, context: RpcApiContext) -> Result<Value, RpcErr> {
-        let peers = context
-            .peer_manager
-            .table
-            .get_peers()
-            .await
-            .map_err(|e| RpcErr::Internal(e.to_string()))?;
+        let peers = context.p2p.peer_table.get_peers(None).await;
 
         let mut peer_list = Vec::new();
 
         for (i, handle) in peers.iter().enumerate() {
-            if let Ok(info) = handle.get_info().await {
-                peer_list.push(PeerInfoResponse {
-                    id: i as u32,
-                    addr: info.addr.to_string(),
-                    services: format!("{:016x}", info.services),
-                    lastsend: 0,
-                    lastrecv: 0,
-                    conntime: info.conntime,
-                    subver: info.user_agent,
-                    startingheight: info.start_height,
-                    version: info.version,
-                    relaytxes: true,
-                });
-            }
+            peer_list.push(PeerInfoResponse {
+                id: i as u32,
+                addr: handle.addr.to_string(),
+                services: format!("{:016x}", handle.services),
+                lastsend: 0,
+                lastrecv: 0,
+                conntime: 0,
+                subver: "/bitcrab:0.1.0/".to_string(),
+                startingheight: 0,
+                version: 70015,
+                relaytxes: handle.conn_type.is_tx_relay_connection(),
+                inbound: handle.conn_type == bitcrab_net::p2p::net_types::ConnectionType::Inbound,
+                connection_type: handle.conn_type.to_string(),
+            });
         }
 
         Ok(json!(peer_list))
@@ -83,12 +75,7 @@ impl RpcHandler for GetConnectionCountRequest {
     }
 
     async fn handle(&self, context: RpcApiContext) -> Result<Value, RpcErr> {
-        let count = context
-            .peer_manager
-            .table
-            .get_peer_count()
-            .await
-            .map_err(|e| RpcErr::Internal(e.to_string()))?;
+        let count = context.p2p.peer_table.get_peer_count().await;
         Ok(json!(count))
     }
 }
@@ -103,6 +90,8 @@ pub struct GetNetworkInfoResponse {
     pub timeoffset: i32,
     pub networkactive: bool,
     pub connections: usize,
+    pub connections_in: usize,
+    pub connections_out: usize,
     pub networks: Vec<Value>,
     pub relayfee: f64,
     pub incrementalfee: f64,
@@ -121,4 +110,6 @@ pub struct PeerInfoResponse {
     pub startingheight: i32,
     pub version: i32,
     pub relaytxes: bool,
+    pub inbound: bool,
+    pub connection_type: String,
 }

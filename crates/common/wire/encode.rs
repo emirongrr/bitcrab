@@ -224,3 +224,8 @@ impl<T: BitcoinEncode> BitcoinEncode for VarList<'_, T> {
         self.0.iter().fold(enc, |e, item| item.encode(e))
     }
 }
+
+/// Helper to serialize any BitcoinEncode type to a byte vector.
+pub fn serialize<T: BitcoinEncode>(value: &T) -> Vec<u8> {
+    Encoder::new().encode_field(value).finish()
+}

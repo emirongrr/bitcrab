@@ -16,7 +16,6 @@ use crate::wire::{
     encode::{BitcoinEncode, Encoder},
     error::DecodeError,
 };
-
 /// An opaque Bitcoin script — a sequence of bytes.
 ///
 /// Does not interpret or validate the script contents.

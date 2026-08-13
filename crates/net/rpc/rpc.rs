@@ -3,18 +3,28 @@ use serde::Deserialize;
 use serde_json::Value;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tracing::{debug, info};
+use tracing::info;
 
 use crate::types::RpcResponse;
 use crate::utils::{RpcErr, RpcErrorMetadata, RpcNamespace, RpcRequest};
-use bitcrab_net::p2p::peer_manager::PeerManager;
-use bitcrab_storage::Store;
+use bitcrab_common::types::hash::BlockHash;
+use bitcrab_net::p2p::connman::Connman;
+
+#[async_trait::async_trait]
+pub trait RpcNodeProvider: Send + Sync {
+    async fn get_headers_tip(&self) -> Result<Option<BlockHash>, String>;
+    async fn get_best_block(&self) -> Result<Option<BlockHash>, String>;
+    async fn get_block_tip(&self) -> Result<Option<BlockHash>, String>;
+    async fn get_block_index_height(&self, hash: &BlockHash) -> Result<Option<u32>, String>;
+    async fn get_block_hash(&self, height: u32) -> Result<Option<BlockHash>, String>;
+    async fn get_block_raw(&self, hash: &BlockHash) -> Result<Option<Vec<u8>>, String>;
+}
 
 /// Dependencies that RPC handlers need to process requests.
 #[derive(Clone)]
 pub struct RpcApiContext {
-    pub store: Store,
-    pub peer_manager: Arc<PeerManager>,
+    pub node: Arc<dyn RpcNodeProvider>,
+    pub p2p: Arc<Connman>,
 }
 
 /// Trait for implementing JSON-RPC method handlers.
@@ -87,7 +97,9 @@ pub async fn map_blockchain_requests(
     req: &RpcRequest,
     context: RpcApiContext,
 ) -> Result<Value, RpcErr> {
-    use crate::blockchain::{GetBlockCountRequest, GetBlockHashRequest, GetBlockRequest, GetBlockchainInfoRequest};
+    use crate::blockchain::{
+        GetBlockCountRequest, GetBlockHashRequest, GetBlockRequest, GetBlockchainInfoRequest,
+    };
     match req.method.as_str() {
         "getblockchaininfo" => GetBlockchainInfoRequest::call(req, context).await,
         "getblockcount" => GetBlockCountRequest::call(req, context).await,

@@ -224,12 +224,19 @@ fn ui(f: &mut Frame, app: &App) {
 
     let conn_count = app.peers.len();
 
-    let stats_text = vec![
+    let stats_text = [
         format!(" Network    : {}", network),
         format!(" Headers    : {}", headers),
         format!(" Blocks     : {}", blocks),
         format!(" Connections: {}", conn_count),
-        format!(" Block Tip : {}", if best_hash.len() > 20 { format!("{}...", &best_hash[..20]) } else { best_hash.to_string() }),
+        format!(
+            " Block Tip : {}",
+            if best_hash.len() > 20 {
+                format!("{}...", &best_hash[..20])
+            } else {
+                best_hash.to_string()
+            }
+        ),
     ];
 
     let stats_list: Vec<ListItem> = stats_text

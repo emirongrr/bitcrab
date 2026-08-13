@@ -1,7 +1,10 @@
 //! Bitcoin P2P wire protocol — message-specific integration tests.
 
 use bitcrab_net::p2p::messages::{
+    getdata::GetData,
+    inv::{Inv, InvType, InvVector},
     ping::{Ping, Pong},
+    verack::Verack,
     version::Version,
     BitcoinMessage,
 };
@@ -50,7 +53,7 @@ fn version_payload_decode_known_vector() {
 
 #[test]
 fn version_roundtrip() {
-    let original = Version::our_version();
+    let original = Version::our_version(0, true);
     let encoded = original.encode();
     let decoded = Version::decode(&encoded).unwrap();
 
@@ -91,6 +94,70 @@ fn pong_echoes_ping_nonce() {
 }
 
 // -----------------------------------------------------------------------
+// Inventory / GetData Tests
+// -----------------------------------------------------------------------
+
+#[test]
+fn bitcoin_core_inv_type_constants_match_protocol_h() {
+    // Bitcoin Core `protocol.h`: enum GetDataMsg.
+    assert_eq!(InvType::Error as u32, 0);
+    assert_eq!(InvType::Tx as u32, 1);
+    assert_eq!(InvType::Block as u32, 2);
+    assert_eq!(InvType::FilteredBlock as u32, 3);
+    assert_eq!(InvType::CmpctBlock as u32, 4);
+    assert_eq!(InvType::Wtx as u32, 5);
+    assert_eq!(InvType::WitnessTx as u32, 0x4000_0001);
+    assert_eq!(InvType::WitnessBlock as u32, 0x4000_0002);
+}
+
+#[test]
+fn bitcoin_core_inv_vector_serializes_type_little_endian_then_hash() {
+    let inv = Inv {
+        inventory: vec![InvVector {
+            inv_type: InvType::WitnessBlock,
+            hash: [0x11; 32],
+        }],
+    };
+
+    let encoded = inv.encode();
+    assert_eq!(encoded.len(), 37);
+    assert_eq!(encoded[0], 1);
+    assert_eq!(&encoded[1..5], &0x4000_0002u32.to_le_bytes());
+    assert_eq!(&encoded[5..37], &[0x11; 32]);
+
+    let decoded = Inv::decode(&encoded).unwrap();
+    assert_eq!(decoded.inventory.len(), 1);
+    assert_eq!(decoded.inventory[0].inv_type, InvType::WitnessBlock);
+    assert_eq!(decoded.inventory[0].hash, [0x11; 32]);
+}
+
+#[test]
+fn bitcoin_core_getdata_uses_same_inventory_vector_wire_format() {
+    let getdata = GetData {
+        inventory: vec![
+            InvVector {
+                inv_type: InvType::Tx,
+                hash: [0x22; 32],
+            },
+            InvVector {
+                inv_type: InvType::Wtx,
+                hash: [0x33; 32],
+            },
+        ],
+    };
+
+    let encoded = getdata.encode();
+    assert_eq!(encoded[0], 2);
+    assert_eq!(&encoded[1..5], &1u32.to_le_bytes());
+    assert_eq!(&encoded[37..41], &5u32.to_le_bytes());
+
+    let decoded = GetData::decode(&encoded).unwrap();
+    assert_eq!(decoded.inventory.len(), 2);
+    assert_eq!(decoded.inventory[0].inv_type, InvType::Tx);
+    assert_eq!(decoded.inventory[1].inv_type, InvType::Wtx);
+}
+
+// -----------------------------------------------------------------------
 // Hardening Tests
 // -----------------------------------------------------------------------
 
@@ -98,4 +165,16 @@ fn pong_echoes_ping_nonce() {
 fn version_too_short_returns_error() {
     let result = Version::decode(&[0u8; 10]);
     assert!(result.is_err());
+}
+
+#[test]
+fn version_rejects_trailing_bytes() {
+    let mut payload = Version::our_version(0, true).encode();
+    payload.push(0);
+    assert!(Version::decode(&payload).is_err());
+}
+
+#[test]
+fn verack_rejects_trailing_bytes() {
+    assert!(Verack::decode(&[0]).is_err());
 }

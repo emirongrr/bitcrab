@@ -30,6 +30,13 @@ pub enum P2pError {
     #[error("checksum mismatch: expected {expected:#010x}, got {actual:#010x}")]
     ChecksumMismatch { expected: u32, actual: u32 },
 
+    /// Command bytes in a message header were not valid Bitcoin command encoding.
+    #[error("malformed command bytes {bytes:?}: {reason}")]
+    MalformedCommand {
+        bytes: [u8; 12],
+        reason: &'static str,
+    },
+
     /// Peer closed the connection unexpectedly.
     #[error("connection closed by peer")]
     ConnectionClosed,
@@ -43,6 +50,10 @@ pub enum P2pError {
     /// Bitcoin Core: `MIN_PEER_PROTO_VERSION` check in `net_processing.cpp`
     #[error("peer version {version} is below minimum {minimum}")]
     PeerVersionTooOld { version: i32, minimum: i32 },
+
+    /// Peer sent the same handshake message twice.
+    #[error("duplicate {command} during handshake")]
+    DuplicateHandshakeMessage { command: &'static str },
 
     /// IO error from the underlying TCP stream.
     #[error("io error: {0}")]

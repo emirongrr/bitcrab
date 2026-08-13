@@ -1,7 +1,6 @@
 use bitcrab_net::p2p::addr_man::AddrMan;
 use bitcrab_net::p2p::message::Magic;
 use bitcrab_net::p2p::messages::{verack::Verack, version::Version, Message};
-use bitcrab_net::p2p::peer_manager::PeerManager;
 use bitcrab_net::p2p::peer_table::PeerTable;
 use bitcrab_storage::InMemoryBackend;
 
@@ -14,7 +13,7 @@ use super::mock::MockPeer;
 /// Scenario A: Correct handshake completes the Connection.
 #[tokio::test]
 async fn test_handshake_flow_success() {
-    let magic = Magic::Mainnet;
+    let magic = Magic::MAINNET;
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let local_addr = listener.local_addr().unwrap();
 
@@ -34,7 +33,7 @@ async fn test_handshake_flow_success() {
         }
 
         // 3. Send out Version and Verack!
-        let v_msg = Version::our_version();
+        let v_msg = Version::our_version(0, true);
         mock_peer.send_msg(&v_msg).await;
         mock_peer.send_msg(&Verack {}).await;
 
@@ -52,11 +51,42 @@ async fn test_handshake_flow_success() {
 
     // Node configuration
     let _storage = Arc::new(InMemoryBackend::open().unwrap());
+    let _store = bitcrab_storage::Store::in_memory(magic).unwrap();
     let table = PeerTable::new(AddrMan::new());
-    let peer_manager = Arc::new(PeerManager::new(magic, table));
+    let sync = Arc::new(bitcrab_net::p2p::sync::SyncManager::new());
+
+    struct MockVal;
+    #[async_trait::async_trait]
+    impl bitcrab_net::p2p::peer_manager::ValidationInterface for MockVal {
+        async fn process_header(
+            &self,
+            _: &bitcrab_common::types::block::BlockHeader,
+        ) -> Result<u32, String> {
+            Ok(0)
+        }
+        async fn process_block(
+            &self,
+            _: &bitcrab_common::types::block::Block,
+        ) -> Result<u32, String> {
+            Ok(0)
+        }
+    }
+
+    let peer_handler = Arc::new(bitcrab_net::p2p::peer_manager::PeerManager::new(
+        table.clone(),
+        Arc::new(MockVal),
+        sync.clone(),
+    ));
+
+    let p2p = bitcrab_net::p2p::connman::Connman::new(magic, table, peer_handler);
 
     // Outbound Connect and Handshake
-    let connect_res = peer_manager.connect_addr(local_addr).await;
+    let connect_res = p2p
+        .connect_addr(
+            local_addr,
+            bitcrab_net::p2p::net_types::ConnectionType::OutboundFullRelay,
+        )
+        .await;
     assert!(connect_res.is_ok(), "Handshake should succeed");
 
     server_task

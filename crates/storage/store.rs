@@ -11,9 +11,9 @@ use crate::api::{tables, StorageBackend};
 use crate::backend::in_memory::InMemoryBackend;
 #[cfg(feature = "rocksdb")]
 use crate::backend::rocksdb::RocksDBBackend;
-use crate::block_file::{BlockFileManager, BlockFileReader, Magic};
+use crate::block_file::{BlockFileManager, Magic};
+use crate::block_manager::WriteMessage;
 use crate::error::StoreError;
-use crate::worker::{StorageWorker, WriteMessage};
 
 /// Storage engine selection.
 pub enum EngineType {
@@ -27,12 +27,12 @@ pub enum EngineType {
 /// The high-level storage orchestrator for the bitcrab node.
 ///
 /// - Reads: Direct and concurrent via Arc<dyn StorageBackend>.
-/// - Writes: Sequential and asynchronous via StorageWorker actor.
+/// - Writes: Sequential and asynchronous via BlockManager actor.
 #[derive(Clone)]
 pub struct Store {
     backend: Arc<dyn StorageBackend>,
-    block_reader: BlockFileReader,
-    worker_tx: mpsc::Sender<WriteMessage>,
+    block_file_manager: BlockFileManager,
+    write_tx: mpsc::Sender<WriteMessage>,
 }
 
 impl Store {
@@ -62,20 +62,21 @@ impl Store {
         };
 
         let block_file_manager = BlockFileManager::new(path, magic, last_file)?;
-        let block_reader = block_file_manager.reader();
 
         // Start the sequential write worker
-        let (tx, rx) = mpsc::channel(1024);
-        let worker = StorageWorker::new(Arc::clone(&backend), block_file_manager, rx);
+        let (tx, rx) = mpsc::channel(100);
+        let worker = crate::block_manager::BlockManager::new(
+            backend.clone(),
+            block_file_manager.clone(),
+            rx,
+        );
 
-        tokio::spawn(async move {
-            worker.run().await;
-        });
+        tokio::spawn(worker.run());
 
         Ok(Self {
             backend,
-            block_reader,
-            worker_tx: tx,
+            block_file_manager,
+            write_tx: tx,
         })
     }
 
@@ -84,21 +85,139 @@ impl Store {
         Self::new("", EngineType::InMemory, magic)
     }
 
-    // ── Headers ───────────────────────────────────────────────────────────────
+    // â”€â”€ Headers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     /// Store a block header and update the chain tip if `is_best` is true.
     pub async fn store_header(
         &self,
         header: BlockHeader, // Move header in
         height: BlockHeight,
+        chain_work: bitcrab_common::types::hash::Hash256,
         is_best: bool,
     ) -> Result<(), StoreError> {
         let (tx, rx) = oneshot::channel();
-        self.worker_tx
+        match self
+            .write_tx
             .send(WriteMessage::StoreHeader {
                 header,
                 height,
+                chain_work,
                 is_best,
+                reply_to: tx,
+            })
+            .await
+        {
+            Ok(_) => rx.await.map_err(|e| StoreError::Custom(e.to_string()))?,
+            Err(e) => Err(StoreError::Custom(e.to_string())),
+        }
+    }
+
+    /// Directly store/update a block index.
+    pub async fn store_block_index(
+        &self,
+        hash: &BlockHash,
+        index: BlockIndex,
+    ) -> Result<(), StoreError> {
+        let (tx, rx) = oneshot::channel();
+        match self
+            .write_tx
+            .send(WriteMessage::StoreBlockIndex {
+                hash: *hash,
+                index,
+                reply_to: tx,
+            })
+            .await
+        {
+            Ok(_) => rx.await.map_err(|e| StoreError::Custom(e.to_string()))?,
+            Err(e) => Err(StoreError::Custom(e.to_string())),
+        }
+    }
+
+    /// Atomically persist a validated header batch and optional best-header tip.
+    pub async fn store_block_indexes(
+        &self,
+        indexes: Vec<(BlockHash, BlockIndex)>,
+        best_tip: Option<BlockHash>,
+    ) -> Result<(), StoreError> {
+        let (tx, rx) = oneshot::channel();
+        self.write_tx
+            .send(WriteMessage::StoreBlockIndexes {
+                indexes,
+                best_tip,
+                reply_to: tx,
+            })
+            .await
+            .map_err(|_| StoreError::Custom("storage worker dead".into()))?;
+
+        rx.await
+            .map_err(|_| StoreError::Custom("storage worker dropped response".into()))?
+    }
+    /// Update the headers tip hash.
+    pub async fn update_headers_tip(&self, hash: BlockHash) -> Result<(), StoreError> {
+        let (tx, rx) = oneshot::channel();
+        match self
+            .write_tx
+            .send(WriteMessage::UpdateHeadersTip { hash, reply_to: tx })
+            .await
+        {
+            Ok(_) => rx.await.map_err(|e| StoreError::Custom(e.to_string()))?,
+            Err(e) => Err(StoreError::Custom(e.to_string())),
+        }
+    }
+
+    /// Directly update the header-height-to-hash index for self-healing.
+    pub async fn store_header_index_only(
+        &self,
+        hash: BlockHash,
+        height: u32,
+    ) -> Result<(), StoreError> {
+        let (tx, rx) = oneshot::channel();
+        self.write_tx
+            .send(WriteMessage::UpdateHeaderIndex {
+                hash,
+                height,
+                reply_to: tx,
+            })
+            .await
+            .map_err(|_| StoreError::Custom("storage worker dead".into()))?;
+
+        rx.await
+            .map_err(|_| StoreError::Custom("storage worker dropped response".into()))?
+    }
+
+    /// Update the current active tip hash.
+    pub async fn update_active_tip(&self, hash: BlockHash) -> Result<(), StoreError> {
+        let (tx, rx) = oneshot::channel();
+        self.write_tx
+            .send(WriteMessage::UpdateActiveTip { hash, reply_to: tx })
+            .await
+            .map_err(|_| StoreError::Custom("storage worker dead".into()))?;
+
+        rx.await
+            .map_err(|_| StoreError::Custom("storage worker dropped response".into()))?
+    }
+
+    /// Mark a block as having its data missing (delete datadir data but keep index).
+    pub async fn delete_block(&self, hash: &BlockHash) -> Result<(), StoreError> {
+        let (tx, rx) = oneshot::channel();
+        self.write_tx
+            .send(WriteMessage::DeleteBlock {
+                hash: *hash,
+                reply_to: tx,
+            })
+            .await
+            .map_err(|_| StoreError::Custom("storage worker dead".into()))?;
+
+        rx.await
+            .map_err(|_| StoreError::Custom("storage worker dropped response".into()))?
+    }
+
+    /// Delete a height-to-hash mapping from CHAIN_META.
+    pub async fn delete_height_mapping(&self, height: u32) -> Result<(), StoreError> {
+        let (tx, rx) = oneshot::channel();
+        self.write_tx
+            .send(WriteMessage::DeleteHeightMapping {
+                height,
                 reply_to: tx,
             })
             .await
@@ -129,7 +248,19 @@ impl Store {
         Ok(Some(index))
     }
 
-    /// Retrieve the hash of the current best block (tip).
+    /// Retrieve the hash of the current best header (tip of the header chain).
+    pub fn get_headers_tip(&self) -> Result<Option<BlockHash>, StoreError> {
+        let read = self.backend.begin_read()?;
+        let Some(bytes) = read.get(tables::UTXOS, &[tables::KEY_HEADERS_TIP])? else {
+            return Ok(None);
+        };
+
+        let mut arr = [0u8; 32];
+        arr.copy_from_slice(&bytes[..32]);
+        Ok(Some(BlockHash::from_bytes(arr)))
+    }
+
+    /// Retrieve the hash of the current best validated block (tip).
     pub fn get_best_block(&self) -> Result<Option<BlockHash>, StoreError> {
         let read = self.backend.begin_read()?;
         let Some(bytes) = read.get(tables::UTXOS, &[tables::KEY_BEST_BLOCK])? else {
@@ -144,9 +275,30 @@ impl Store {
     /// Retrieve a block hash by its height.
     pub fn get_block_hash(&self, height: u32) -> Result<Option<BlockHash>, StoreError> {
         let read = self.backend.begin_read()?;
-        
+
         let mut key = Vec::with_capacity(5);
         key.push(tables::PREFIX_HEIGHT);
+        key.extend_from_slice(&height.to_be_bytes());
+
+        let Some(bytes) = read.get(tables::CHAIN_META, &key)? else {
+            return Ok(None);
+        };
+
+        let mut arr = [0u8; 32];
+        arr.copy_from_slice(&bytes[..32]);
+        Ok(Some(BlockHash::from_bytes(arr)))
+    }
+
+    /// Lookup block hash by its height in the header chain.
+    /// Used for difficulty retargeting during sync.
+    pub fn get_block_hash_by_header_height(
+        &self,
+        height: u32,
+    ) -> Result<Option<BlockHash>, StoreError> {
+        let read = self.backend.begin_read()?;
+
+        let mut key = Vec::with_capacity(5);
+        key.push(tables::PREFIX_HEADER_HEIGHT);
         key.extend_from_slice(&height.to_be_bytes());
 
         let Some(bytes) = read.get(tables::CHAIN_META, &key)? else {
@@ -197,20 +349,22 @@ impl Store {
         Ok(Some(coin))
     }
 
-    /// Atomically update the UTXO set and current tip.
+    /// Atomically update the UTXO set, height index, and current tip.
     pub async fn update_utxos(
         &self,
         coins: std::collections::HashMap<
             bitcrab_common::types::transaction::OutPoint,
-            crate::worker::CoinUpdate,
+            crate::block_manager::CoinUpdate,
         >,
         best_block_hash: Option<bitcrab_common::types::hash::BlockHash>,
+        connected_blocks: Vec<(u32, bitcrab_common::types::hash::BlockHash)>,
     ) -> Result<(), StoreError> {
         let (tx, rx) = oneshot::channel();
-        self.worker_tx
+        self.write_tx
             .send(WriteMessage::UpdateUtxoSet {
                 coins,
                 best_block: best_block_hash,
+                connected_blocks,
                 reply_to: tx,
             })
             .await
@@ -220,20 +374,22 @@ impl Store {
             .map_err(|_| StoreError::Custom("storage worker dropped response".into()))?
     }
 
-    // ── Blocks ────────────────────────────────────────────────────────────────
+    // â”€â”€ Blocks â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     /// Append a full block to disk and update its index record with the file pointer.
     pub async fn store_block(
         &self,
         header: BlockHeader,
         height: BlockHeight,
+        chain_work: bitcrab_common::types::hash::Hash256,
         raw_block: Vec<u8>,
     ) -> Result<FlatFilePos, StoreError> {
         let (tx, rx) = oneshot::channel();
-        self.worker_tx
+        self.write_tx
             .send(WriteMessage::StoreBlock {
                 header,
                 height,
+                chain_work,
                 raw_block,
                 reply_to: tx,
             })
@@ -251,7 +407,7 @@ impl Store {
         undo_data: bitcrab_common::types::undo::BlockUndo,
     ) -> Result<(), StoreError> {
         let (tx, rx) = oneshot::channel();
-        self.worker_tx
+        self.write_tx
             .send(WriteMessage::StoreUndo {
                 block_hash,
                 undo_data,
@@ -275,14 +431,14 @@ impl Store {
             return Ok(None);
         };
 
-        let data = self.block_reader.read_block(pos)?;
+        let data = self.block_file_manager.read_block(pos)?;
         Ok(Some(data))
     }
 
     /// Flush buffers to disk.
     pub async fn flush(&self) -> Result<(), StoreError> {
         let (tx, rx) = oneshot::channel();
-        self.worker_tx
+        self.write_tx
             .send(WriteMessage::Flush { reply_to: tx })
             .await
             .map_err(|_| StoreError::Custom("storage worker dead".into()))?;

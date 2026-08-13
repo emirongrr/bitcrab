@@ -12,6 +12,10 @@ path = "main.rs"
 name = "bitcrab"
 path = "lib.rs"
 
+[features]
+default = []
+core-reference = ["bitcrab-consensus/core-reference"]
+
 [dependencies]
 # Internal
 bitcrab-common  = { workspace = true }
@@ -20,6 +24,7 @@ bitcrab-node    = { workspace = true }
 bitcrab-storage = { workspace = true }
 bitcrab-rpc     = { workspace = true }
 bitcrab-consensus = { workspace = true }
+bitcrab-script  = { workspace = true }
 
 # External
 clap.workspace       = true
@@ -27,6 +32,8 @@ tokio.workspace      = true
 tokio-util.workspace = true
 tracing.workspace    = true
 tracing-subscriber.workspace = true
+serde_json.workspace   = true
 thiserror.workspace  = true
 eyre = "0.6"
 dirs = "5.0"
+async-trait = "0.1"

@@ -1,4 +1,8 @@
 /target/
+/peers.dat
+/test/blocks/
+/.signet-*/
+*.log
 .DS_Store
 *.swp
 .idea/

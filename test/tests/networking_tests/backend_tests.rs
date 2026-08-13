@@ -1,6 +1,5 @@
 use bitcrab_net::p2p::addr_man::AddrMan;
 use bitcrab_net::p2p::message::Magic;
-use bitcrab_net::p2p::peer_manager::PeerManager;
 use bitcrab_net::p2p::peer_table::PeerTable;
 use bitcrab_storage::InMemoryBackend;
 
@@ -14,7 +13,7 @@ use tokio::net::TcpListener;
 
 #[tokio::test]
 async fn test_mock_node_strict_drop() {
-    let magic = Magic::Mainnet;
+    let magic = Magic::MAINNET;
 
     // ── 1. Mock peer (malicious node) ────────────────────────────────────────
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -97,14 +96,47 @@ async fn test_mock_node_strict_drop() {
 
     // ── 2. Bitcrab node attempts handshake with mock ──────────────────────────
     let _storage = Arc::new(InMemoryBackend::open().unwrap());
+    let _store = bitcrab_storage::Store::in_memory(magic).unwrap();
     let table = PeerTable::new(AddrMan::new());
-    let peer_manager = Arc::new(PeerManager::new(magic, table));
+    let sync = std::sync::Arc::new(bitcrab_net::p2p::sync::SyncManager::new());
+
+    struct MockVal;
+    #[async_trait::async_trait]
+    impl bitcrab_net::p2p::peer_manager::ValidationInterface for MockVal {
+        async fn process_header(
+            &self,
+            _: &bitcrab_common::types::block::BlockHeader,
+        ) -> Result<u32, String> {
+            Ok(0)
+        }
+        async fn process_block(
+            &self,
+            _: &bitcrab_common::types::block::Block,
+        ) -> Result<u32, String> {
+            Ok(0)
+        }
+    }
+
+    let peer_handler = std::sync::Arc::new(bitcrab_net::p2p::peer_manager::PeerManager::new(
+        table.clone(),
+        std::sync::Arc::new(MockVal),
+        sync.clone(),
+    ));
+
+    let manager = std::sync::Arc::new(bitcrab_net::p2p::connman::Connman::new(
+        magic,
+        table,
+        peer_handler,
+    ));
 
     eprintln!("[bitcrab] connecting to mock peer at {local_addr}");
 
     let connect_result = timeout(
         Duration::from_secs(3),
-        peer_manager.connect_addr(local_addr),
+        manager.connect_addr(
+            local_addr,
+            bitcrab_net::p2p::net_types::ConnectionType::OutboundFullRelay,
+        ),
     )
     .await;
 
@@ -114,7 +146,7 @@ async fn test_mock_node_strict_drop() {
                 "[bitcrab] FAIL: connect_addr timed out — handshake hung instead of failing fast"
             );
         }
-        Ok(Ok((_peer, _rx))) => {
+        Ok(Ok(_peer)) => {
             panic!("[bitcrab] FAIL: connect_addr returned Ok — handshake should have failed on garbage input");
         }
         Ok(Err(e)) => {

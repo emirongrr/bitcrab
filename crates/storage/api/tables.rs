@@ -9,7 +9,7 @@
 //! - RocksDB (one column family per table) is used where Bitcoin Core
 //!   uses LevelDB: block index metadata and the UTXO set.
 //!
-//! - Undo data (`rev*.dat`) is not yet implemented.
+//! - Undo data is written to append-only `rev*.dat` files.
 //!
 //! ## RocksDB tables
 //!
@@ -45,12 +45,11 @@ pub const BLOCK_INDEX: &str = "block_index";
 ///
 /// Two key formats coexist in this table (matching Bitcoin Core's chainstate):
 ///
-/// - Coin   : [`PREFIX_COIN`] + 32-byte txid + 4-byte vout (LE u32)
-///            → compressed coin (height, coinbase flag, scriptPubKey, amount)
+/// - Coin: [`PREFIX_COIN`] + 32-byte txid + 4-byte vout (LE u32).
+///   Value: compressed coin (height, coinbase flag, scriptPubKey, amount).
 ///
-/// - Best block : [`KEY_BEST_BLOCK`]
-///               → 32-byte block hash of the block through which the UTXO
-///                 set is consistent. Updated atomically with coin writes.
+/// - Best block: [`KEY_BEST_BLOCK`].
+///   Value: 32-byte block hash of the block through which the UTXO set is consistent.
 pub const UTXOS: &str = "utxos";
 
 /// Miscellaneous chain-level metadata.
@@ -64,10 +63,8 @@ pub const UTXOS: &str = "utxos";
 /// Equivalent to the non-`b` records in Bitcoin Core's `blocks/index` LevelDB.
 pub const CHAIN_META: &str = "chain_meta";
 
-/// Undo data (reversal state for UTXO set).
-///
-/// key   : 32-byte block hash
-/// value : serialized `BlockUndo` (all coins spent by this block)
+/// Legacy undo column family. New undo payloads live in `rev*.dat`; this
+/// column family remains open until an explicit migration removes old data.
 pub const BLOCK_UNDO: &str = "block_undo";
 
 /// Every column family opened at database startup.
@@ -91,10 +88,14 @@ pub const PREFIX_BLOCK: u8 = b'b';
 pub const PREFIX_COIN: u8 = b'C';
 
 /// Key for the best block header hash in [`UTXOS`].
-pub const KEY_BEST_BLOCK: u8 = b'b';
+pub const KEY_HEADERS_TIP: u8 = b'h';
 
-/// Key for the best full block hash (with body) in [`UTXOS`].
-pub const KEY_BLOCK_TIP: u8 = b'B';
+/// Key for the best validated block hash in [`UTXOS`].
+pub const KEY_BEST_BLOCK: u8 = b'B';
+
+/// Key for the best full block hash downloaded (with body) in [`UTXOS`].
+/// This is an internal tracker for IBD progress.
+pub const KEY_BLOCK_TIP: u8 = b'D';
 
 /// Key for the last block file number in [`CHAIN_META`].
 ///
@@ -120,3 +121,7 @@ pub const KEY_REINDEX: u8 = b'R';
 /// Full key: `0x48` (H) + 4-byte big-endian height.
 /// Value: 32-byte block hash.
 pub const PREFIX_HEIGHT: u8 = b'H';
+
+/// Prefix for header height to hash mapping in [`CHAIN_META`].
+/// Used for PoW retargeting during header sync.
+pub const PREFIX_HEADER_HEIGHT: u8 = b'z';

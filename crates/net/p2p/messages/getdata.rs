@@ -3,7 +3,12 @@
 use super::inv::InvVector;
 use super::BitcoinMessage;
 use crate::p2p::message::Command;
-use bitcrab_common::wire::{encode::VarInt, error::DecodeError, Decoder, Encoder};
+use bitcrab_common::wire::{
+    decode_exact, encode::VarInt, error::DecodeError, BitcoinDecode, BitcoinEncode, Decoder,
+    Encoder,
+};
+
+const MAX_GETDATA_ENTRIES: usize = 50_000;
 
 #[derive(Debug, Clone)]
 pub struct GetData {
@@ -14,28 +19,39 @@ impl BitcoinMessage for GetData {
     const COMMAND: Command = Command::GetData;
 
     fn encode(&self) -> Vec<u8> {
-        let mut enc = Encoder::new().encode_field(&VarInt(self.inventory.len() as u64));
-        for item in &self.inventory {
-            enc = enc
-                .encode_field(&(item.inv_type as u32))
-                .encode_field(&item.hash);
-        }
-        enc.finish()
+        Encoder::new().encode_field(self).finish()
     }
 
     fn decode(payload: &[u8]) -> Result<Self, DecodeError> {
-        let dec = Decoder::new(payload);
+        decode_exact::<Self>(payload, "getdata")
+    }
+}
+
+impl BitcoinEncode for GetData {
+    fn encode(&self, enc: Encoder) -> Encoder {
+        self.inventory.iter().fold(
+            enc.encode_field(&VarInt(self.inventory.len() as u64)),
+            |enc, item| enc.encode_field(item),
+        )
+    }
+}
+
+impl BitcoinDecode for GetData {
+    fn decode(dec: Decoder) -> Result<(Self, Decoder), DecodeError> {
         let (count, mut dec) = dec.read_varint("inv_count")?;
+        if count as usize > MAX_GETDATA_ENTRIES {
+            return Err(DecodeError::AllocationTooLarge {
+                field: "inv_count",
+                len: count,
+                limit: MAX_GETDATA_ENTRIES,
+            });
+        }
         let mut inventory = Vec::with_capacity(count as usize);
         for _ in 0..count {
-            let (typ, d) = dec.decode_field::<u32>("inv_type")?;
-            let (hash, d) = d.decode_field::<[u8; 32]>("hash")?;
-            inventory.push(InvVector {
-                inv_type: super::inv::InvType::from_u32(typ),
-                hash,
-            });
-            dec = d;
+            let (item, next_dec) = dec.decode_field::<InvVector>("inv_vector")?;
+            inventory.push(item);
+            dec = next_dec;
         }
-        Ok(Self { inventory })
+        Ok((Self { inventory }, dec))
     }
 }

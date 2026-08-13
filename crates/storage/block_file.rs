@@ -171,15 +171,16 @@ impl FlatFileSeq {
     }
 
     /// Open file `n` for appending, creating it if it does not exist.
-    /// Pre-allocates space up to the next chunk boundary.
-    pub fn open_for_write(&self, n: u32) -> Result<File, StoreError> {
+    /// Pre-allocates space up to the next chunk boundary based on the provided `offset`.
+    pub fn open_for_write(&self, n: u32, offset: u64) -> Result<File, StoreError> {
         fs::create_dir_all(&self.dir).map_err(StoreError::Io)?;
         let file = OpenOptions::new()
             .create(true)
+            .truncate(false)
             .write(true)
             .open(self.path(n))
             .map_err(StoreError::Io)?;
-        self.preallocate(&file)?;
+        self.preallocate(&file, offset)?;
         Ok(file)
     }
 
@@ -187,6 +188,34 @@ impl FlatFileSeq {
     pub fn open_for_read(&self, n: u32) -> Result<File, StoreError> {
         File::open(self.path(n))
             .map_err(|_| StoreError::BlockFileUnavailable { file: n, offset: 0 })
+    }
+
+    fn used_size(&self, n: u32, magic: Magic) -> Result<u64, StoreError> {
+        let path = self.path(n);
+        if !path.exists() {
+            return Ok(0);
+        }
+
+        let mut file = File::open(path).map_err(StoreError::Io)?;
+        let file_len = file.metadata().map_err(StoreError::Io)?.len();
+        let expected_magic = Encoder::new().encode_field(&magic).finish();
+        let mut offset = 0u64;
+
+        while offset + 8 <= file_len {
+            file.seek(SeekFrom::Start(offset)).map_err(StoreError::Io)?;
+            let mut header = [0u8; 8];
+            if file.read_exact(&mut header).is_err() || header[..4] != expected_magic {
+                break;
+            }
+
+            let size = u32::from_le_bytes(header[4..8].try_into().unwrap()) as u64;
+            if size == 0 || offset + 8 + size > file_len {
+                break;
+            }
+            offset += 8 + size;
+        }
+
+        Ok(offset)
     }
 
     /// Finalize file `n`: truncate unused pre-allocated space and fsync.
@@ -203,14 +232,18 @@ impl FlatFileSeq {
         Ok(())
     }
 
-    /// Write a single zero byte at the next chunk boundary so the OS
-    /// pre-allocates disk space, reducing later fragmentation.
+    /// Ensures the file has enough allocated space to hold a record ending at `needed_until`.
+    ///
+    /// Writes a single zero byte at the next chunk boundary if necessary,
+    /// so the OS pre-allocates disk space, reducing later fragmentation.
     ///
     /// Matches Bitcoin Core's `AllocateFileRange`.
-    fn preallocate(&self, file: &File) -> Result<(), StoreError> {
-        let current = file.metadata().map_err(StoreError::Io)?.len();
-        let boundary = ((current / self.chunk_size) + 1) * self.chunk_size;
-        if current < boundary {
+    fn preallocate(&self, file: &File, needed_until: u64) -> Result<(), StoreError> {
+        let current_file_len = file.metadata().map_err(StoreError::Io)?.len();
+
+        // Only extend if we actually need more space than currently allocated.
+        if needed_until >= current_file_len {
+            let boundary = ((needed_until / self.chunk_size) + 1) * self.chunk_size;
             let mut f = file.try_clone().map_err(StoreError::Io)?;
             f.seek(SeekFrom::Start(boundary - 1))
                 .map_err(StoreError::Io)?;
@@ -229,6 +262,7 @@ impl FlatFileSeq {
 /// rotates to a new file when the current one is full.
 ///
 /// Equivalent to the flat-file portion of Bitcoin Core's `BlockManager`.
+#[derive(Clone)]
 pub struct BlockFileManager {
     blocks: FlatFileSeq,
     undo: FlatFileSeq,
@@ -247,6 +281,10 @@ pub struct BlockFileReader {
 }
 
 impl BlockFileReader {
+    pub fn magic(&self) -> Magic {
+        self.magic
+    }
+
     pub fn read_block(&self, pos: FlatFilePos) -> Result<Vec<u8>, StoreError> {
         read_record(&self.blocks, pos, self.magic)
     }
@@ -310,13 +348,16 @@ impl BlockFileManager {
         }
 
         let write_at = self.current_size;
-        let mut file = self.blocks.open_for_write(self.current_file)?;
+        let mut file = self
+            .blocks
+            .open_for_write(self.current_file, write_at + record_len)?;
         file.seek(SeekFrom::Start(write_at))
             .map_err(StoreError::Io)?;
 
         self.write_record(&mut file, raw_block)?;
-        file.sync_all().map_err(StoreError::Io)?;
-        drop(file); // Explicitly close on Windows before any read attempts
+        // Bitcoin Core batches durability barriers in FlushStateToDisk instead
+        // of forcing an fsync for every block received during IBD.
+        drop(file);
 
         let data_offset = write_at + 8;
         self.current_size += record_len;
@@ -336,13 +377,13 @@ impl BlockFileManager {
         current_undo_size: u64,
     ) -> Result<(FlatFilePos, u64), StoreError> {
         let write_at = current_undo_size;
-        let mut file = self.undo.open_for_write(blk_file)?;
+        let record_len = 8 + undo_data.len() as u64;
+        let mut file = self.undo.open_for_write(blk_file, write_at + record_len)?;
         file.seek(SeekFrom::Start(write_at))
             .map_err(StoreError::Io)?;
 
         self.write_record(&mut file, undo_data)?;
-        file.sync_all().map_err(StoreError::Io)?;
-        drop(file); // Explicitly close on Windows before any read attempts
+        drop(file);
 
         let data_offset = write_at + 8;
         let new_undo_size = current_undo_size + 8 + undo_data.len() as u64;
@@ -351,6 +392,11 @@ impl BlockFileManager {
             FlatFilePos::new(blk_file, data_offset as u32),
             new_undo_size,
         ))
+    }
+
+    /// Return the used record length, excluding a pre-allocated zero tail.
+    pub fn undo_used_size(&self, file: u32) -> Result<u64, StoreError> {
+        self.undo.used_size(file, self.magic)
     }
 
     // ── Read ──────────────────────────────────────────────────────────────────

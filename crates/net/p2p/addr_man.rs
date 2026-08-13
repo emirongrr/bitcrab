@@ -2,7 +2,7 @@
 //!
 //! Replaces the simple PeerTable with CAddrMan-inspired buckets:
 //! - New Table: 1024 buckets, filled from gossip/DNS.
-//! - Tried Table: 64 buckets, filled only after successful handshakes.
+//! - Tried Table: 256 buckets, filled only after successful handshakes (Aligned with Bitcoin Core).
 
 use crate::p2p::messages::addr::NetAddr;
 use rand::Rng;
@@ -17,7 +17,7 @@ use std::{fs, path::Path};
 use tracing::{debug, info};
 
 const ADDRMAN_NEW_BUCKET_COUNT: usize = 1024;
-const ADDRMAN_TRIED_BUCKET_COUNT: usize = 64;
+const ADDRMAN_TRIED_BUCKET_COUNT: usize = 256;
 const ADDRMAN_BUCKET_SIZE: usize = 64;
 
 const MAX_SCORE: i32 = 100;
@@ -145,8 +145,7 @@ impl AddrMan {
             entries,
         };
 
-        let encoded = bincode::serialize(&snapshot)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        let encoded = bincode::serialize(&snapshot).map_err(std::io::Error::other)?;
         fs::write(path, encoded)?;
         debug!("AddrMan saved: {} entries", self.map_info.len());
         Ok(())
@@ -343,6 +342,10 @@ impl AddrMan {
 
     pub fn len(&self) -> usize {
         self.map_info.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.map_info.is_empty()
     }
 
     pub fn connectable_count(&self) -> usize {

@@ -4,23 +4,20 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
-use tracing::{info, error};
+use tracing::{error, info};
 
-use bitcrab_storage::Store;
-use bitcrab_net::p2p::peer_manager::PeerManager;
+use bitcrab_net::p2p::connman::Connman;
+use bitcrab_rpc::rpc::RpcNodeProvider;
 
 /// Starts the JSON-RPC server on a background task.
 pub fn init_rpc(
     addr: SocketAddr,
-    store: Store,
-    peer_manager: Arc<PeerManager>,
+    node: Arc<dyn RpcNodeProvider>,
+    p2p: Arc<Connman>,
     tracker: &TaskTracker,
     cancel_token: CancellationToken,
 ) {
-    let rpc_ctx = bitcrab_rpc::RpcApiContext {
-        store,
-        peer_manager,
-    };
+    let rpc_ctx = bitcrab_rpc::rpc::RpcApiContext { node, p2p };
 
     tracker.spawn(async move {
         tokio::select! {

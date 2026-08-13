@@ -5,96 +5,67 @@
 //! Bitcoin Core: CConnman in src/net.cpp — ThreadMessageHandler,
 //! ThreadOpenConnections, ThreadDNSAddressSeed
 
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::sleep;
 use tracing::{debug, info, warn};
 
 use crate::p2p::{
-    actor::Actor, addr_man::AddrMan, dispatcher::DispatcherActor, errors::P2pError, message::Magic,
-    peer_manager::PeerManager, peer_table::PeerTable, sync::SyncManager,
+    connman::Connman,
+    errors::P2pError,
+    net_types::{ConnectionType, MAX_INBOUND_CONNECTIONS},
 };
-
-/// Target number of simultaneous peer connections.
-const TARGET_OUTBOUND: usize = 8;
-const MAX_INBOUND: usize = 117;
 
 /// How long to wait between peer health checks.
 const HEALTH_CHECK_INTERVAL: Duration = Duration::from_secs(30);
 
-/// Network configuration.
-pub struct NetworkConfig {
-    pub magic: Magic,
-    pub port: u16,
-}
-
-impl NetworkConfig {
-    pub fn signet() -> Self {
-        Self {
-            magic: Magic::Signet,
-            port: 38333,
-        }
-    }
-
-    pub fn mainnet() -> Self {
-        Self {
-            magic: Magic::Mainnet,
-            port: 8333,
-        }
-    }
-}
-
 /// Start the Bitcoin P2P network services.
 pub async fn run_p2p_maintenance(
-    manager: std::sync::Arc<PeerManager>,
-    config: NetworkConfig,
+    p2p: std::sync::Arc<Connman>,
+    chain: bitcrab_common::ChainType,
 ) -> Result<(), P2pError> {
-    use crate::p2p::discovery::DiscoveryActor;
+    use crate::p2p::discovery::PeerDiscovery;
     use crate::p2p::initiator::ConnectionInitiator;
 
+    let params = chain.chain_params();
+    let _magic = params.magic;
+    let port = params.default_port;
+    let seeds = params.dns_seeds.iter().map(|s| s.to_string()).collect();
+
     info!(
-        "[net] starting modern actor-based maintenance for network {:?}",
-        config.magic
+        "[net] starting bitcrab network services for chain: {}",
+        chain
     );
 
-    // 1. Start Discovery Actor (DNS seeding and periodic harvesting)
-    let _discovery = DiscoveryActor::new(config.magic, config.port, manager.table.clone()).spawn();
+    // 1. Start Discovery (DNS seeding and periodic harvesting)
+    PeerDiscovery::new(format!("{}", chain), port, seeds, p2p.peer_table.clone()).spawn();
 
     // 2. Start Connection Initiator (proactive outbound management)
-    let _initiator =
-        ConnectionInitiator::new(manager.table.clone(), manager.clone(), TARGET_OUTBOUND).spawn();
+    ConnectionInitiator::new(p2p.peer_table.clone(), p2p.clone()).spawn();
 
     // 3. Start Inbound Accept Loop
-    let accept_manager = std::sync::Arc::clone(&manager);
+    let accept_p2p = std::sync::Arc::clone(&p2p);
     tokio::spawn(async move {
-        accept_loop(accept_manager, config.port).await;
+        accept_loop(accept_p2p, port).await;
     });
 
     // 4. Maintenance Loop (Wait forever or handle shutdown)
     loop {
         sleep(HEALTH_CHECK_INTERVAL).await;
-        let count = manager.table.get_peer_count().await.unwrap_or(0);
-        debug!("[net] background check: {} active peers", count);
+        let counts = p2p.peer_table.get_connection_counts().await;
+        debug!(
+            "[net] peers: total={}, inbound={}, full-relay={}, block-relay-only={}, feeler={}",
+            counts.total(),
+            counts.inbound,
+            counts.outbound_full_relay,
+            counts.block_relay_only,
+            counts.feeler
+        );
     }
 }
 
-/// Start the network with the full actor-system initialized.
-pub async fn start_network(
-    config: NetworkConfig,
-    store: bitcrab_storage::Store,
-) -> Result<(), P2pError> {
-    let table = PeerTable::new(AddrMan::new());
-
-    // Initialize Coordination Layers
-    let sync = SyncManager::new(store.clone(), table.clone(), None);
-    let dispatcher = DispatcherActor::new(table.clone(), sync).spawn();
-
-    // Initialize Peer Manager with Dispatcher reference
-    let manager = std::sync::Arc::new(PeerManager::new(config.magic, table, dispatcher));
-
-    run_p2p_maintenance(manager, config).await
-}
-
-async fn accept_loop(manager: std::sync::Arc<PeerManager>, port: u16) {
+async fn accept_loop(p2p: std::sync::Arc<Connman>, port: u16) {
     let listener = match tokio::net::TcpListener::bind(format!("0.0.0.0:{}", port)).await {
         Ok(l) => l,
         Err(e) => {
@@ -103,25 +74,44 @@ async fn accept_loop(manager: std::sync::Arc<PeerManager>, port: u16) {
         }
     };
     info!("Listening for inbound connections on 0.0.0.0:{}", port);
+    let pending_inbound = Arc::new(AtomicUsize::new(0));
 
     loop {
         match listener.accept().await {
             Ok((stream, addr)) => {
-                let count = manager.table.get_peer_count().await.unwrap_or(0);
-                if count >= TARGET_OUTBOUND + MAX_INBOUND {
-                    debug!("Rejected inbound from {} (max peers reached)", addr);
+                let active_inbound = p2p
+                    .peer_table
+                    .get_peer_count_by_type(ConnectionType::Inbound)
+                    .await;
+                let reserved = try_reserve_inbound_slot(
+                    &pending_inbound,
+                    active_inbound,
+                    MAX_INBOUND_CONNECTIONS,
+                );
+                if !reserved {
+                    debug!(
+                        "Rejected inbound from {} ({} inbound slots full)",
+                        addr, MAX_INBOUND_CONNECTIONS
+                    );
                     continue;
                 }
-                if manager.is_banned(&addr.ip()) {
+                if p2p.is_banned(&addr.ip()) {
+                    pending_inbound.fetch_sub(1, Ordering::AcqRel);
                     warn!("Rejected inbound from BANNED IP {}", addr.ip());
                     continue;
                 }
 
                 info!("Accepted inbound connection from {}", addr);
-                let mg = std::sync::Arc::clone(&manager);
+                let p2p_handler = std::sync::Arc::clone(&p2p);
+                let pending_inbound = pending_inbound.clone();
 
                 tokio::spawn(async move {
-                    if let Err(e) = mg.handshake(stream, addr, true).await {
+                    let result = p2p_handler
+                        .handshake(stream, addr, true, ConnectionType::Inbound)
+                        .await;
+                    pending_inbound.fetch_sub(1, Ordering::AcqRel);
+
+                    if let Err(e) = result {
                         warn!("Inbound handshake with {} failed: {}", addr, e);
                     } else {
                         info!("Inbound handshake complete: {}", addr);
@@ -132,5 +122,81 @@ async fn accept_loop(manager: std::sync::Arc<PeerManager>, port: u16) {
                 warn!("Accept failed: {}", e);
             }
         }
+    }
+}
+
+fn try_reserve_inbound_slot(
+    pending_inbound: &AtomicUsize,
+    active_inbound: usize,
+    max_inbound: usize,
+) -> bool {
+    pending_inbound
+        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |pending| {
+            (active_inbound.saturating_add(pending) < max_inbound).then_some(pending + 1)
+        })
+        .is_ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inbound_reservations_never_exceed_available_slots() {
+        let pending = AtomicUsize::new(0);
+        let active = MAX_INBOUND_CONNECTIONS - 2;
+
+        assert!(try_reserve_inbound_slot(
+            &pending,
+            active,
+            MAX_INBOUND_CONNECTIONS
+        ));
+        assert!(try_reserve_inbound_slot(
+            &pending,
+            active,
+            MAX_INBOUND_CONNECTIONS
+        ));
+        assert!(!try_reserve_inbound_slot(
+            &pending,
+            active,
+            MAX_INBOUND_CONNECTIONS
+        ));
+        assert_eq!(pending.load(Ordering::Acquire), 2);
+    }
+
+    #[test]
+    fn inbound_slot_can_be_reused_after_failed_handshake() {
+        let pending = AtomicUsize::new(0);
+        let active = MAX_INBOUND_CONNECTIONS - 1;
+
+        assert!(try_reserve_inbound_slot(
+            &pending,
+            active,
+            MAX_INBOUND_CONNECTIONS
+        ));
+        assert!(!try_reserve_inbound_slot(
+            &pending,
+            active,
+            MAX_INBOUND_CONNECTIONS
+        ));
+
+        pending.fetch_sub(1, Ordering::AcqRel);
+
+        assert!(try_reserve_inbound_slot(
+            &pending,
+            active,
+            MAX_INBOUND_CONNECTIONS
+        ));
+    }
+
+    #[test]
+    fn full_inbound_table_rejects_before_handshake() {
+        let pending = AtomicUsize::new(0);
+        assert!(!try_reserve_inbound_slot(
+            &pending,
+            MAX_INBOUND_CONNECTIONS,
+            MAX_INBOUND_CONNECTIONS
+        ));
+        assert_eq!(pending.load(Ordering::Acquire), 0);
     }
 }

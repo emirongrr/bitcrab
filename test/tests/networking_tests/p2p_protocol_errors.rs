@@ -5,11 +5,11 @@ use bitcrab_net::p2p::message::Magic;
 #[test]
 fn test_invalid_magic_bytes_rejection() {
     // Only 4 valid magic values should be accepted
-    let valid_magi = vec![
-        Magic::Mainnet,
-        Magic::Testnet3,
-        Magic::Signet,
-        Magic::Regtest,
+    let valid_magi = [
+        Magic::MAINNET,
+        Magic::TESTNET3,
+        Magic::SIGNET,
+        Magic::REGTEST,
     ];
 
     // Try invalid combinations

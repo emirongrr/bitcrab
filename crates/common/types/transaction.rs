@@ -65,6 +65,10 @@ impl TxIn {
     pub fn is_final(&self) -> bool {
         self.sequence == Self::SEQUENCE_FINAL
     }
+
+    pub fn signals_rbf(&self) -> bool {
+        self.sequence < 0xFFFF_FFFE
+    }
 }
 
 impl BitcoinEncode for TxIn {
@@ -242,7 +246,7 @@ impl BitcoinDecode for Transaction {
     fn decode(dec: Decoder) -> Result<(Self, Decoder), DecodeError> {
         let (version, dec) = dec.decode_field::<u32>("Transaction::version")?;
 
-        let (marker, _peek_dec) = dec.decode_field::<u8>("Transaction::marker")?;
+        let marker = dec.peek_u8("Transaction::marker")?;
 
         if marker == 0 {
             let (_, dec) = dec.decode_field::<u8>("Transaction::marker")?;
