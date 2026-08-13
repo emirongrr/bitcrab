@@ -1,132 +1,130 @@
-<div align="center">
-  <img src="assets/banner.png" width="100%" alt="Bitcrab Epic Banner">
-  <br>
-  <h1>Bitcrab</h1>
-  <p><strong>A High-Performance, Simplicity-Driven Bitcoin Full Node in Rust</strong></p>
+# Bitcrab
 
-  [![License: MIT](https://img.shields.io/badge/License-MIT-orange.svg)](https://opensource.org/licenses/MIT)
-  [![Rust: 1.75+](https://img.shields.io/badge/Rust-1.75%2B-blue.svg)](https://www.rust-lang.org/)
-  [![Network: Signet](https://img.shields.io/badge/Network-Signet-brightgreen.svg)](#)
-</div>
+Bitcrab is an independent Bitcoin full-node implementation and post-quantum
+Bitcoin research platform written in Rust.
 
----
+Bitcoin Core C++ is the behavioral reference for Bitcoin consensus, P2P, and
+storage durability. Bitcrab's research layer is deliberately separated from
+Bitcoin consensus so counterfactual experiments cannot silently change normal
+node behavior.
 
-Bitcrab is a minimal, educational, yet production-inspired Bitcoin full node implementation. The project prioritizes readability, correctness, and a clean architecture designed to address the inherent complexity of long-standing blockchain implementations.
+## Research Scope
 
-## 🧭 Philosophy & Vision
+Bitcrab is being built to measure questions such as:
 
-Bitcrab is a manifestation of the **Cypherpunk** spirit in a world of increasing digital enclosure. We operate on the conviction that privacy, decentralization, and radical transparency are the only acceptable terms for the future of money. Bitcrab is not just a software client; it is an instrument of sovereignty, designed for those who refuse to trust and choose to verify.
+- How would standardized post-quantum signatures affect Bitcoin transaction,
+  block, UTXO, and full-chain size?
+- How do classic, PQ-only, and hybrid authorization policies compare?
+- What are the effects on verification throughput, IBD, reindex, relay,
+  mempool admission, and reorg handling?
+- Which historical scripts can be translated faithfully, and which require
+  explicit assumptions?
 
-We are committed to the fundamental principles that define a truly decentralized system:
+Research output must distinguish:
 
-- **Permissionless Openness**: Anyone, anywhere, should participate as an equal peer without seeking approval.
-- **Radical Decentralization**: Minimizing dependence on any single actor, ensuring the network survives even if its creators vanish.
-- **Censorship Resistance**: Stripping centralized entities of the power to interfere with individual sovereignty.
-- **Total Auditability**: Anyone must be able to validate the rules for themselves—the primary mission of running a full node.
-- **Credible Neutrality**: Building base-layer infrastructure that is demonstrably fair and transparent to all.
-- **Tools, Not Empires**: We build interoperable tools that empower users, rather than walled gardens that trap them.
-- **Cooperative Mindset**: Working together on shared research and libraries to create a positive-sum future for the entire ecosystem.
+- **Measured** results from an executed cryptographic backend.
+- **Modeled** results derived from declared sizes and Bitcoin weight rules.
+- **Synthetic** authorization produced without historical private keys.
 
-By building an independent full node from the first line of code, Bitcrab empowers the individual to become their own ultimate authority. We adhere to the core cypherpunk mantra: **"Cypherpunks write code."**
+The project does not claim that synthetic PQ signatures prove historical
+ownership or that experimental PQ rules are Bitcoin consensus.
 
-The development of Bitcrab is guided by three fundamental pillars:
+## Current Status
 
-1.  **Simplicity Over Complexity**: The architecture is rooted in the pursuit of radical simplicity. By writing minimal code and prioritizing architectural clarity, Bitcrab achieves a level of resilience and performance that bloated systems struggle to maintain. This approach ensures the codebase remains accessible, robust, and future-proof.
-2.  **Client Diversity (Inspired by Ethereum)**: A robust blockchain requires multiple independent implementations to prevent systemic monoculture risks. Deeply influenced by the **Ethereum Vision**, Bitcrab strives to bring the same multi-client resilience to the Bitcoin ecosystem, ensuring the protocol remains defined by its universal specification rather than a single codebase.
-3.  **Future-Ready Research & Innovation**: Adhering to these principles of simplicity enables rapid iteration on next-generation features, such as **Post-Quantum (PQ) Signatures**. Bitcrab addresses the urgent need for cryptographic evolution, serving as an experimental bed to ensure Bitcoin's long-term survival against emerging quantum threats.
+- Signet headers and blocks can be synchronized and persisted.
+- Bitcoin wire framing, peer lifecycle, block download, chainstate, flat block
+  files, and RocksDB-backed indexes are implemented.
+- Native script validation is incomplete for full SegWit and Taproot
+  equivalence.
+- Optional `libbitcoinconsensus` support is retained as a differential-testing
+  oracle.
+- PQ size and Bitcoin-weight comparison profiles are available.
+- Real PQ signing/verifying backends and historical shadow replay remain
+  research milestones.
 
-Clarity and code readability are not just goals; they are the primary defenses against technical debt and systemic risk.
+## Reproducible PQ Comparison
 
-### 🧬 The Case for Evolution: Beyond the Era of Stasis
-
-Bitcoin is often praised for its immutability and the extreme difficulty of changing its core protocol. While this conservatism has protected the network’s integrity for over a decade, we believe the perception that Bitcoin *cannot* or *should not* change is a systemic risk. Evolution is not a violation of Bitcoin’s principles; it is a requirement for its survival.
-
-The primary catalyst for this shift will be the transition to the **Quantum Era**. The emergence of quantum computing represents an existential threshold that will demand more than just maintenance—it will demand a fundamental cryptographic transition. Bitcrab is founded on the conviction that Bitcoin must proactively prepare for this future. We serve as a research-first implementation designed to test **Post-Quantum (PQ) Signatures** and architectural upgrades, ensuring that when the pressure for change becomes inevitable, the community has a battle-tested path forward.
-
----
-
-## 🎨 Design Principles
-
-- **Effortless Setup**: Ensure smooth execution across all target environments.
-- **Vertical Integration**: Maintain a minimal amount of dependencies.
-- **Extensible Structure**: Built in a way that makes it easy to add new layers (e.g., L2 integration, research VMs) on top.
-- **Simple Type System**: Avoid generics leaking across the codebase.
-- **Few Abstractions**: Do not generalize until strictly necessary. Clarity is prioritized over complex abstractions.
-- **Readability Over Optimization**: Maintainability is favored over premature optimizations.
-- **Principled Concurrency**: Concurrency is utilized only where essential to maintain performance, keeping the system logic easy to reason about.
-
-## 🚀 Key Features
-
-- **Signet Native**: Optimized for the Bitcoin Signet network by default.
-- **Component Isolation**: Decoupled P2P, Synchronization, and Storage layers using clean message-passing boundaries.
-- **Parallel Header & Block Sync**: A streamlined pipeline that catches up headers instantly while downloading block bodies in parallel.
-- **Modular Storage**: Hybrid storage engine with RocksDB metadata indexing and bit-for-bit compatible `blk*.dat` storage.
-- **Real-time Monitoring**: Built-in Terminal UI (TUI) for network health and synchronization tracking.
-- **Bitcoin Core Compatible RPC**: JSON-RPC 2.0 interface supporting essential audit and blockchain commands.
-
-## 🛠️ Getting Started
-
-### Prerequisites
-
-- [Rust](https://www.rust-lang.org/tools/install) (latest stable version)
-- Build tools (for RocksDB dependencies)
-
-### Installation
-
-```bash
-git clone https://github.com/emirongrr/bitcrab.git
-cd bitcrab
-cargo build --release
-```
-
-### Running the Node
-
-Start the Bitcrab node on the Signet network:
+Compare classic and standardized PQ authorization profiles:
 
 ```powershell
-cargo run --release -p bitcrab -- signet run
+cargo run -p bitcrab -- signet research compare `
+  --signature-checks 1000 `
+  --public-keys 1000 `
+  --key-disclosure commit `
+  --placement witness
 ```
 
-### Running the Monitor
-
-Inspect your node's health in real-time:
+Emit machine-readable output:
 
 ```powershell
-cargo run -p bitcrab-monitor
+cargo run -p bitcrab -- signet research compare `
+  --signature-checks 1000 `
+  --public-keys 1000 `
+  --json
 ```
 
-## 📂 Project Structure
+The current comparison is a byte-accurate model using declared signature and
+public-key sizes. It does not measure cryptographic execution time.
 
-- `cmd/`: Binary entry points (node and monitor).
-- `crates/`: Modular core components.
-  - `common/`: Core primitives (Hash, Block, Transaction).
-  - `net/`: P2P wire protocol and Actor orchestration.
-  - `storage/`: RocksDB indexer and flat-file persistence.
-  - `consensus/`: Bitcoin rule validation.
-- `docs/`: Technical specifications and API guides.
+## Run The Node
 
-## 📡 RPC API
+```powershell
+cargo run --release -p bitcrab -- signet run `
+  --dbcache 1024 `
+  --consensus-engine core-reference
+```
 
-Bitcrab provides a Bitcoin Core compatible RPC interface on port `8332`.
+Build without the optional Bitcoin Core reference engine:
 
-| Method | Description |
-| :--- | :--- |
-| `getblockchaininfo` | Returns status of headers and block synchronization. |
-| `getblock <hash>` | Retrieves full block data with transaction list. |
-| `getpeerinfo` | Lists all active P2P connections and their metadata. |
+```powershell
+cargo build -p bitcrab --no-default-features
+```
 
-For a full list of commands, see [RPC Guide](docs/rpc.md).
+## Architecture
 
-## 📚 References and acknowledgements
+| Component | Responsibility |
+| --- | --- |
+| `crates/common` | Bitcoin primitives, chain parameters, and wire encoding |
+| `crates/consensus` | Stateless and contextual Bitcoin validation |
+| `crates/script` | Script execution, signature engines, and research models |
+| `crates/net` | Bitcoin P2P framing, peers, and synchronization |
+| `crates/storage` | RocksDB indexes and `blk*.dat` / `rev*.dat` files |
+| `crates/node` | Composition adapters between storage, consensus, and network |
+| `cmd/bitcrab` | Node and research CLI |
 
-The following links, repositories, companies, and projects have been essential inspirations for Bitcrab:
+See:
 
-- [Bitcoin Core](https://github.com/bitcoin/bitcoin) - The gold standard of Bitcoin implementations.
-- [Ethereum Philosophy](https://ethereum.org/en/philosophy/) - For its commitment to decentralization and multi-client resilience.
-- [Ethrex](https://github.com/lambdaclass/ethrex) - A primary inspiration for our architecture and mission.
-- [Lambda Class](https://blog.lambdaclass.com/lambdas-engineering-philosophy/) - For their high-standard engineering philosophy.
-- [Vitalik Buterin](https://vitalik.eth.limo/general/2023/12/28/cypherpunk.html) - For defining the core cypherpunk values for the modern era.
+- [PQ execution laboratory](docs/specs/research/pq-execution-lab.md)
+- [Consensus engine and signature experiments](docs/specs/consensus/engine-and-signature-experiments.md)
+- [Signet sync and performance](docs/specs/signet-sync-performance.md)
+- [Storage specification](docs/specs/storage.md)
 
-## 📄 License
+## Research Integrity
 
-Bitcrab is licensed under the [MIT License](LICENSE).
+Every publishable experiment should record:
+
+- source chain and tip;
+- code revision;
+- immutable experiment parameters;
+- authorization manifest ID and full experiment ID;
+- algorithm and backend version;
+- modeled versus measured fields;
+- hardware, compiler, thread count, and cache settings;
+- unsupported scripts and affected value;
+- raw result artifacts sufficient for independent reproduction.
+
+Real PQ backends must pass official known-answer tests and differential tests
+against an independent reference implementation before their results are
+treated as cryptographic measurements.
+
+## References
+
+- [Bitcoin Core](https://github.com/bitcoin/bitcoin)
+- [NIST FIPS 204: ML-DSA](https://csrc.nist.gov/pubs/fips/204/final)
+- [NIST FIPS 205: SLH-DSA](https://csrc.nist.gov/pubs/fips/205/final)
+- [BIP 360: Pay-to-Merkle-Root](https://github.com/bitcoin/bips/blob/master/bip-0360.mediawiki)
+- [BIP 361: Post Quantum Migration and Legacy Signature Sunset](https://github.com/bitcoin/bips/blob/master/bip-0361.mediawiki)
+
+## License
+
+[MIT](LICENSE)

@@ -9,10 +9,16 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: "-D warnings"
+  RUST_BACKTRACE: 1
+  # librocksdb-sys 0.16 vendors RocksDB 8.10, which predates GCC 13 and relies
+  # on <cstdint> arriving transitively. Force-include it rather than patching
+  # vendored sources. C++ only: adding it to CFLAGS breaks the C dependencies.
+  CXXFLAGS: "-include cstdint"
 
 jobs:
   ci:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
@@ -41,3 +47,66 @@ jobs:
 
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
+
+      # The native script engine is the production path. libbitcoinconsensus is
+      # a test oracle and must not end up linked into the shipped binary, so
+      # assert the default dependency tree is free of it.
+      - name: Native-only dependency boundary
+        run: |
+          if cargo tree -p bitcrab -e normal | grep -q bitcoinconsensus; then
+            echo "::error::bitcoinconsensus is in the default dependency tree of bitcrab."
+            echo "The native engine must be the only script engine in a default build."
+            cargo tree -p bitcrab -e normal | grep -B5 bitcoinconsensus
+            exit 1
+          fi
+          echo "OK: default build links no libbitcoinconsensus."
+          # And confirm the oracle really is reachable when asked for, so this
+          # check cannot pass by the feature being silently broken.
+          cargo tree -p bitcrab --features core-reference -e normal \
+            | grep -q bitcoinconsensus \
+            || { echo "::error::core-reference feature no longer pulls bitcoinconsensus"; exit 1; }
+          echo "OK: core-reference feature still reaches the oracle."
+
+  # Runs the native script engine and libbitcoinconsensus against identical
+  # inputs and asserts they agree. Separate from `ci` because it compiles
+  # Bitcoin Core's C++ consensus library, which roughly doubles the build.
+  #
+  # This does not link on MSVC (unresolved __imp_secp256k1_* — the
+  # bitcoinconsensus crate builds the C++ half without SECP256K1_STATIC), which
+  # is why the feature is opt-in and this job is Linux-only.
+  # See docs/differential-testing.md.
+  differential:
+    name: Differential vs libbitcoinconsensus
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-differential-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Toolchain versions
+        run: |
+          cargo --version
+          c++ --version | head -1
+
+      - name: Clippy (differential feature)
+        run: |
+          cargo clippy -p bitcrab-consensus --features differential-tests \
+            --all-targets -- -D warnings
+
+      - name: Differential tests
+        run: |
+          cargo test -p bitcrab-consensus --features differential-tests \
+            -- --nocapture
