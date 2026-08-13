@@ -8,14 +8,26 @@ rust-version.workspace = true
 [lib]
 path = "lib.rs"
 
+[features]
+# The native engine is the default path. `core-reference` links
+# libbitcoinconsensus purely as a differential oracle; it is opt-in because it
+# does not link on every toolchain (see docs/specs/script-engine.md).
+default = []
+core-reference = ["dep:bitcoinconsensus"]
+differential-tests = ["core-reference"]
+
 [dependencies]
 # Internal
 bitcrab-common.workspace  = true
 bitcrab-storage.workspace = true
 bitcrab-script.workspace  = true
-bitcrab-net = { workspace = true }
 
 # External
+secp256k1.workspace = true
 tokio.workspace    = true
 tracing.workspace  = true
 thiserror.workspace = true
+bitcoinconsensus = { workspace = true, optional = true }
+
+[dev-dependencies]
+hex.workspace       = true
