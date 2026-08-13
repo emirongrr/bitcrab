@@ -11,5 +11,9 @@ path = "lib.rs"
 [dependencies]
 sha2.workspace      = true
 ripemd.workspace    = true
+sha1.workspace      = true
 hex.workspace       = true
 thiserror.workspace = true
+tokio.workspace     = true
+tracing.workspace   = true
+serde.workspace     = true
