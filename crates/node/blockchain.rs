@@ -443,6 +443,68 @@ impl ValidationInterface for Blockchain {
         Ok(heights)
     }
 
+    /// Bitcoin Core: `ProcessGetHeaders` in `src/net_processing.cpp`.
+    async fn headers_after_locator(
+        &self,
+        locator: &[BlockHash],
+        stop_hash: BlockHash,
+        limit: usize,
+    ) -> Vec<bitcrab_common::types::block::BlockHeader> {
+        // An empty locator asks for exactly the header named by stop_hash.
+        if locator.is_empty() {
+            return match self.store.get_block_index(&stop_hash) {
+                Ok(Some(index)) => vec![index.header],
+                _ => Vec::new(),
+            };
+        }
+
+        let fork_height = bitcrab_common::types::block::find_locator_fork(
+            locator,
+            |hash| {
+                self.store
+                    .get_block_index(hash)
+                    .ok()
+                    .flatten()
+                    .map(|index| index.height.0)
+            },
+            |height| self.header_hash_at_height(height),
+        );
+
+        // Nothing in common means the peer shares only genesis with us, so
+        // start at height 1 — which is what Core's FindFork returning genesis
+        // amounts to.
+        let mut height = fork_height.map(|h| h + 1).unwrap_or(1);
+
+        let mut headers = Vec::with_capacity(limit.min(64));
+        while headers.len() < limit {
+            let Some(hash) = self.header_hash_at_height(height) else {
+                break;
+            };
+            let Some(index) = self.store.get_block_index(&hash).ok().flatten() else {
+                break;
+            };
+            headers.push(index.header);
+            if hash == stop_hash {
+                break;
+            }
+            height += 1;
+        }
+
+        headers
+    }
+
+    /// Bitcoin Core: the block branch of `ProcessGetData`.
+    async fn block_by_hash(&self, hash: &BlockHash) -> Option<bitcrab_common::types::block::Block> {
+        use bitcrab_common::wire::decode::{BitcoinDecode, Decoder};
+
+        let raw = self.store.get_block(hash).ok().flatten()?;
+        // A header without a body is a normal state during headers-first sync,
+        // so a miss here is not an error — the caller answers `notfound`.
+        bitcrab_common::types::block::Block::decode(Decoder::new(&raw))
+            .ok()
+            .map(|(block, _)| block)
+    }
+
     /// Processes a single incoming block.
     ///
     /// Bitcoin Core: `ProcessNewBlock` -> `AcceptBlock` -> `ActivateBestChain`

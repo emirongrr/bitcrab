@@ -6,8 +6,12 @@ use tracing::{debug, info, warn};
 
 const HEADER_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 
+use bitcrab_common::constants::{MAX_HEADERS_PER_MSG, PROTOCOL_VERSION};
+
 use crate::p2p::{
     messages::{
+        getdata::GetData,
+        getheaders::GetHeaders,
         headers::Headers,
         inv::{Inv, InvType},
         Message, Pong,
@@ -48,6 +52,36 @@ pub trait ValidationInterface: Send + Sync {
     /// from genesis whenever our tip is not on their chain.
     fn get_block_locator(&self, tip: &bitcrab_common::types::hash::BlockHash) -> Vec<BlockHash> {
         vec![*tip]
+    }
+
+    /// Headers that follow the newest entry of `locator` we recognise.
+    ///
+    /// Bitcoin Core: `ProcessGetHeaders`. The locator is scanned newest-first
+    /// for a hash on our best header chain; that is the fork point, and the
+    /// answer is up to `limit` headers after it, stopping early if `stop_hash`
+    /// is reached. An empty locator means "just the header named by
+    /// `stop_hash`".
+    ///
+    /// Returns empty when we have nothing useful to say, which is also the
+    /// right answer for a peer already at our tip.
+    async fn headers_after_locator(
+        &self,
+        _locator: &[BlockHash],
+        _stop_hash: BlockHash,
+        _limit: usize,
+    ) -> Vec<bitcrab_common::types::block::BlockHeader> {
+        Vec::new()
+    }
+
+    /// A block body from disk, if we have it.
+    ///
+    /// `None` means the block is unknown or header-only, and the caller should
+    /// answer `notfound` rather than stay silent.
+    async fn block_by_hash(
+        &self,
+        _hash: &BlockHash,
+    ) -> Option<bitcrab_common::types::block::Block> {
+        None
     }
 }
 
@@ -208,9 +242,11 @@ impl PeerManager {
                     peer_manager.on_block(node_id, b).await;
                 });
             }
-            Message::Inv(i) => self.on_inv(node_id, i).await,
+            Message::Inv(i) => self.on_inv(node_id, handle, i).await,
             Message::Ping(ping) => self.on_ping(handle, ping.nonce).await,
             Message::NotFound(i) => self.on_not_found(node_id, i).await,
+            Message::GetHeaders(g) => self.on_get_headers(node_id, handle, g).await,
+            Message::GetData(g) => self.on_get_data(node_id, handle, g).await,
             _ => debug!(
                 "[peer_manager] unhandled message type from {}: {:?}",
                 node_id,
@@ -343,25 +379,124 @@ impl PeerManager {
         }
     }
 
-    async fn on_inv(&self, peer_id: NodeId, inv: Inv) {
+    /// A peer announced inventory it has.
+    ///
+    /// Bitcoin Core: the block branch of `ProcessMessage(INV)`. An announced
+    /// block whose header we do not have yet means our chain is behind, so the
+    /// useful reply is `getheaders` rather than `getdata` — headers-first sync
+    /// means we want the header chain before any body.
+    async fn on_inv(&self, peer_id: NodeId, node: NodeHandle, inv: Inv) {
+        let announced: Vec<BlockHash> = inv
+            .inventory
+            .iter()
+            .filter(|item| matches!(item.inv_type, InvType::Block | InvType::WitnessBlock))
+            .map(|item| BlockHash::from_bytes(item.hash))
+            .collect();
+
+        if announced.is_empty() {
+            return;
+        }
+
         debug!(
-            "[peer_manager] received inv with {} items from {}",
-            inv.inventory.len(),
+            "[peer_manager] {} announced {} block(s)",
+            peer_id,
+            announced.len()
+        );
+
+        // Ask from our own tip, not from the announced hash: the announcement
+        // may be several blocks ahead, and the locator is what lets the peer
+        // work out everything we are missing.
+        let (tip_hash, tip_height) = self.sync_manager.get_headers_tip();
+        if !self.sync_manager.try_begin_header_request(
+            peer_id,
+            tip_hash,
+            tip_height,
+            HEADER_REQUEST_TIMEOUT,
+        ) {
+            return;
+        }
+
+        let locator = self.validation.get_block_locator(&tip_hash);
+        if node
+            .send(Message::GetHeaders(
+                crate::p2p::messages::getheaders::GetHeaders {
+                    version: PROTOCOL_VERSION as u32,
+                    locator,
+                    stop_hash: BlockHash::ZERO,
+                },
+            ))
+            .await
+            .is_err()
+        {
+            self.sync_manager.finish_header_request(peer_id);
+        }
+    }
+
+    /// Serve `getheaders`.
+    ///
+    /// Bitcoin Core: `ProcessGetHeaders`. Without this a Core peer cannot sync
+    /// from us at all — it asks, gets silence, and eventually disconnects.
+    async fn on_get_headers(&self, peer_id: NodeId, node: NodeHandle, req: GetHeaders) {
+        let headers = self
+            .validation
+            .headers_after_locator(&req.locator, req.stop_hash, MAX_HEADERS_PER_MSG)
+            .await;
+
+        debug!(
+            "[peer_manager] serving {} headers to {}",
+            headers.len(),
             peer_id
         );
 
-        let mut block_hashes = Vec::new();
-        for item in inv.inventory {
-            if item.inv_type == InvType::Block {
-                block_hashes.push(item.hash);
+        // An empty headers message is a valid answer meaning "you are at my
+        // tip", and Core sends it, so do not skip the reply.
+        let _ = node.send(Message::Headers(Headers { headers })).await;
+    }
+
+    /// Serve `getdata` for blocks.
+    ///
+    /// Bitcoin Core: `ProcessGetData`. Anything we cannot supply — an unknown
+    /// block, a header we hold without its body, or a type we do not serve —
+    /// goes back in a single `notfound`, because a peer waiting on a silent
+    /// request stalls until its own timeout fires.
+    async fn on_get_data(&self, peer_id: NodeId, node: NodeHandle, req: GetData) {
+        let mut not_found = Vec::new();
+        let mut served = 0usize;
+
+        for item in req.inventory {
+            match item.inv_type {
+                InvType::Block | InvType::WitnessBlock => {
+                    let hash = BlockHash::from_bytes(item.hash);
+                    match self.validation.block_by_hash(&hash).await {
+                        Some(block) => {
+                            if node.send(Message::Block(block)).await.is_err() {
+                                return;
+                            }
+                            served += 1;
+                        }
+                        None => not_found.push(item),
+                    }
+                }
+                // Transaction relay is not implemented; saying so is better
+                // than leaving the peer to time out.
+                _ => not_found.push(item),
             }
         }
 
-        if !block_hashes.is_empty() {
-            info!(
-                "[peer_manager] new blocks announced, triggering get_data for {} items",
-                block_hashes.len()
+        if !not_found.is_empty() {
+            debug!(
+                "[peer_manager] served {} block(s) to {}, {} not found",
+                served,
+                peer_id,
+                not_found.len()
             );
+            let _ = node
+                .send(Message::NotFound(Inv {
+                    inventory: not_found,
+                }))
+                .await;
+        } else if served > 0 {
+            debug!("[peer_manager] served {} block(s) to {}", served, peer_id);
         }
     }
 

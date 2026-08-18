@@ -479,6 +479,38 @@ where
     have
 }
 
+/// Resolve a peer's locator to the height of the highest block we share.
+///
+/// The inverse of [`build_block_locator`], and the reason the two live
+/// together: a change to one is almost always wrong without the other.
+///
+/// Both lookups are needed and neither substitutes for the other.
+/// `height_of` answers "do we know this hash at all", `hash_at_height` answers
+/// "is it on our best chain". A locator entry we know but which sits on a stale
+/// branch must be rejected: it has a height, but that height says nothing about
+/// what the peer is missing, and serving from it would send headers the peer
+/// cannot connect to anything.
+///
+/// `None` means we share nothing beyond genesis.
+///
+/// Bitcoin Core: `CChain::FindFork()`, as used by `ProcessGetHeaders`.
+pub fn find_locator_fork<H, A>(
+    locator: &[BlockHash],
+    height_of: H,
+    hash_at_height: A,
+) -> Option<u32>
+where
+    H: Fn(&BlockHash) -> Option<u32>,
+    A: Fn(u32) -> Option<BlockHash>,
+{
+    // The locator is ordered newest-first, so the first entry that survives
+    // both checks is the highest block in common.
+    locator.iter().find_map(|hash| {
+        let height = height_of(hash)?;
+        (hash_at_height(height).as_ref() == Some(hash)).then_some(height)
+    })
+}
+
 #[cfg(test)]
 mod locator_tests {
     use super::*;
@@ -534,6 +566,51 @@ mod locator_tests {
         );
         // Exponential back-off keeps the locator small even for long chains.
         assert!(heights.len() < 40, "locator too large: {}", heights.len());
+    }
+
+    #[test]
+    fn fork_is_the_highest_shared_block() {
+        // Our chain is 0..=100; the peer's locator starts above it.
+        let ours = |h: u32| (h <= 100).then(|| hash_for(h));
+        let height_of = |hash: &BlockHash| {
+            let h = u32::from_le_bytes(hash.as_bytes()[..4].try_into().unwrap());
+            (h <= 100).then_some(h)
+        };
+
+        let locator = vec![hash_for(105), hash_for(103), hash_for(99), hash_for(0)];
+        assert_eq!(find_locator_fork(&locator, height_of, ours), Some(99));
+    }
+
+    #[test]
+    fn a_hash_on_a_stale_branch_is_not_a_fork_point() {
+        // We know the hash and its height, but that height on our chain holds a
+        // different block — the peer is on a branch we abandoned.
+        let stale = BlockHash::from_bytes([0xee; 32]);
+        let height_of = |hash: &BlockHash| (*hash == stale).then_some(50);
+        let ours = |h: u32| Some(hash_for(h));
+
+        assert_eq!(find_locator_fork(&[stale], height_of, ours), None);
+    }
+
+    #[test]
+    fn no_shared_history_yields_none() {
+        let locator = vec![BlockHash::from_bytes([0xaa; 32])];
+        assert_eq!(find_locator_fork(&locator, |_| None, |_| None), None);
+        assert_eq!(find_locator_fork(&[], |_| Some(1), |_| None), None);
+    }
+
+    #[test]
+    fn a_locator_we_built_resolves_back_to_our_own_tip() {
+        // Round trip: the two functions are inverses, which is the property
+        // that keeps sync from deadlocking.
+        let ours = |h: u32| (h <= 5000).then(|| hash_for(h));
+        let height_of = |hash: &BlockHash| {
+            let h = u32::from_le_bytes(hash.as_bytes()[..4].try_into().unwrap());
+            (h <= 5000).then_some(h)
+        };
+
+        let locator = build_block_locator(5000, ours);
+        assert_eq!(find_locator_fork(&locator, height_of, ours), Some(5000));
     }
 
     #[test]
