@@ -435,6 +435,36 @@ impl Store {
         Ok(Some(data))
     }
 
+    /// Retrieve a block's undo data — the coins it spent — from disk.
+    ///
+    /// Mirrors `get_block`: the undo record lives in the same numbered file as
+    /// the block, at the position recorded in the block index.
+    ///
+    /// `Ok(None)` means we have no undo data for this block, which is normal
+    /// for a block that was never connected, and for the genesis block. It is
+    /// the caller's job to treat that as "cannot disconnect" rather than as
+    /// "nothing to restore" — those are very different things for the UTXO set.
+    pub fn get_undo(
+        &self,
+        hash: &BlockHash,
+    ) -> Result<Option<bitcrab_common::types::undo::BlockUndo>, StoreError> {
+        use bitcrab_common::types::undo::BlockUndo;
+        use bitcrab_common::wire::decode::{BitcoinDecode, Decoder};
+
+        let Some(index) = self.get_block_index(hash)? else {
+            return Ok(None);
+        };
+        let Some(pos) = index.undo_pos else {
+            return Ok(None);
+        };
+
+        let bytes = self.block_file_manager.read_undo(pos)?;
+        let (undo, dec) =
+            BlockUndo::decode(Decoder::new(&bytes)).map_err(StoreError::WireDecode)?;
+        dec.finish("BlockUndo").map_err(StoreError::WireDecode)?;
+        Ok(Some(undo))
+    }
+
     /// Flush buffers to disk.
     pub async fn flush(&self) -> Result<(), StoreError> {
         let (tx, rx) = oneshot::channel();
