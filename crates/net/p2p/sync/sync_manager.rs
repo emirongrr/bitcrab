@@ -452,7 +452,7 @@ impl SyncManager {
         let mut state = self.download_state.lock().unwrap();
         let mut workloads = HashMap::new();
 
-        for (_, (addr, _, _)) in state.in_flight_blocks.iter() {
+        for (addr, _, _) in state.in_flight_blocks.values() {
             *workloads.entry(*addr).or_insert(0) += 1;
         }
         state.peer_workload = workloads;
