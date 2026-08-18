@@ -251,7 +251,7 @@ fn compute_modified_merkle_root(block: &Block, modified_coinbase: &Transaction) 
 }
 
 /// Standard Bitcoin merkle root over an ordered hash list.
-fn merkle_root(mut hashes: Vec<Hash256>) -> Hash256 {
+pub(crate) fn merkle_root(mut hashes: Vec<Hash256>) -> Hash256 {
     if hashes.is_empty() {
         return Hash256::ZERO;
     }
@@ -274,6 +274,8 @@ fn merkle_root(mut hashes: Vec<Hash256>) -> Hash256 {
 }
 
 /// Index of the coinbase output holding the BIP 141 witness commitment.
+///
+/// Shared with `validation`, which needs it to check the commitment itself.
 ///
 /// Bitcoin Core: `GetWitnessCommitmentIndex()` in `src/validation.cpp` — the
 /// *last* matching output wins.

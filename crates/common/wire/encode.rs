@@ -166,6 +166,20 @@ impl BitcoinEncode for Vec<u8> {
 /// ```
 pub struct VarInt(pub u64);
 
+impl VarInt {
+    /// Encoded length in bytes, without building the encoding.
+    ///
+    /// Bitcoin Core: `GetSizeOfCompactSize()`.
+    pub const fn serialized_size(self) -> usize {
+        match self.0 {
+            0x00..=0xFC => 1,
+            0xFD..=0xFFFF => 3,
+            0x10000..=0xFFFF_FFFF => 5,
+            _ => 9,
+        }
+    }
+}
+
 impl BitcoinEncode for VarInt {
     fn encode(&self, enc: Encoder) -> Encoder {
         match self.0 {

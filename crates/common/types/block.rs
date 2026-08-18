@@ -253,6 +253,23 @@ impl Block {
     /// Calculate the Merkle Root of all transactions in this block.
     ///
     /// Bitcoin Core: `ComputeMerkleRoot()` in `src/consensus/merkle.cpp`.
+    /// Block weight in weight units.
+    ///
+    /// Bitcoin Core: `GetBlockWeight()` — base size counted three extra times
+    /// plus the full size, so base bytes cost four weight units each and
+    /// witness bytes cost one. That discount is what lets a segwit block carry
+    /// more data than the old one-megabyte limit while staying bounded.
+    pub fn weight(&self) -> u64 {
+        let total = crate::wire::encode::serialize(self).len() as u64;
+        let witness: u64 = self
+            .transactions
+            .iter()
+            .map(|tx| tx.witness_serialized_size() as u64)
+            .sum();
+        let base = total.saturating_sub(witness);
+        base * 3 + total
+    }
+
     pub fn compute_merkle_root(&self) -> Hash256 {
         if self.transactions.is_empty() {
             return Hash256::ZERO;

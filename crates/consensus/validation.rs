@@ -3,6 +3,10 @@
 //! Implements the rules for validating Bitcoin transactions and blocks.
 //! Matches Bitcoin Core's `src/consensus/tx_verify.cpp` and `src/validation.cpp`.
 
+use bitcrab_common::constants::{
+    COINBASE_MATURITY, INITIAL_BLOCK_REWARD, MAX_BLOCK_WEIGHT, MAX_COINBASE_SCRIPT_SIZE,
+    MIN_COINBASE_SCRIPT_SIZE,
+};
 use bitcrab_common::types::amount::Amount;
 use bitcrab_common::types::coin::Coin;
 use bitcrab_common::types::transaction::OutPoint;
@@ -69,7 +73,111 @@ impl TransactionValidator {
             return Err(ValidationError::TotalAmountOutOfRange);
         }
 
-        // 4. Check for duplicate inputs (optional here, but good for early rejection)
+        // 4. Reject duplicate inputs.
+        //
+        // Bitcoin Core: the `vInOutPoints` set in `CheckTransaction`. Spending
+        // the same outpoint twice inside one transaction would otherwise let a
+        // coin be counted twice on the input side.
+        let mut seen = std::collections::HashSet::with_capacity(tx.inputs.len());
+        for input in &tx.inputs {
+            if !seen.insert(&input.previous_output) {
+                return Err(ValidationError::DuplicateInput);
+            }
+        }
+
+        // 5. Coinbase scriptSig length, or prevout null-ness for everything else.
+        if tx.is_coinbase() {
+            let len = tx.inputs[0].script_sig.len();
+            if !(MIN_COINBASE_SCRIPT_SIZE..=MAX_COINBASE_SCRIPT_SIZE).contains(&len) {
+                return Err(ValidationError::BadCoinbaseScriptLength(len));
+            }
+        } else {
+            for input in &tx.inputs {
+                if input.previous_output.txid == bitcrab_common::types::hash::Txid::ZERO
+                    && input.previous_output.vout == u32::MAX
+                {
+                    return Err(ValidationError::NullPrevout);
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Block reward at `height`, excluding fees.
+    ///
+    /// Bitcoin Core: `GetBlockSubsidy()` in `src/validation.cpp`.
+    pub fn block_subsidy(height: BlockHeight, params: &ChainParams) -> Amount {
+        let halvings = height.0 / params.consensus.n_subsidy_halving_interval;
+        // Shifting by 64 or more is undefined; Core forces the reward to zero.
+        if halvings >= 64 {
+            return Amount::ZERO;
+        }
+        Amount::from_sat(INITIAL_BLOCK_REWARD >> halvings).unwrap_or(Amount::ZERO)
+    }
+
+    /// Verify the coinbase encodes its own height.
+    ///
+    /// Bitcoin Core: the BIP 34 branch of `ContextualCheckBlock`. Without it two
+    /// blocks could share a coinbase transaction, and therefore a txid — the
+    /// duplicate-coinbase problem BIP 30 patched and BIP 34 made structural.
+    fn check_bip34_height(block: &Block, height: BlockHeight) -> Result<(), ValidationError> {
+        let expected = bitcrab_script::ScriptNum(height.0 as i64).encode();
+        let mut expected_push = Vec::with_capacity(expected.len() + 1);
+        bitcrab_script::script_ops::push_data(&mut expected_push, &expected);
+
+        let script_sig = block.transactions[0].inputs[0].script_sig.as_bytes();
+        if !script_sig.starts_with(&expected_push) {
+            return Err(ValidationError::BadCoinbaseHeight { expected: height.0 });
+        }
+        Ok(())
+    }
+
+    /// Verify the BIP 141 witness commitment.
+    ///
+    /// Bitcoin Core: the segwit branch of `ContextualCheckBlock`.
+    ///
+    /// The commitment is `hash256(witness_merkle_root || witness_reserved)`,
+    /// stored in the last coinbase output matching `6a24aa21a9ed`. It is
+    /// optional — but when it is absent, no transaction may carry witness data,
+    /// or that data would ride along uncommitted.
+    fn check_witness_commitment(block: &Block) -> Result<(), ValidationError> {
+        let coinbase = &block.transactions[0];
+
+        let Some(commitment_index) = crate::signet::get_witness_commitment_index(coinbase) else {
+            // No commitment: witness data anywhere in the block is unanchored.
+            if block.transactions.iter().any(|tx| tx.is_segwit()) {
+                return Err(ValidationError::UnexpectedWitness);
+            }
+            return Ok(());
+        };
+
+        // The nonce is the coinbase's single witness item, exactly 32 bytes.
+        let witness = &coinbase.inputs[0].witness;
+        if witness.len() != 1 || witness[0].len() != 32 {
+            return Err(ValidationError::BadWitnessNonceSize);
+        }
+
+        // Witness merkle tree: the coinbase's wtxid is defined as zero, because
+        // the commitment it would otherwise contain is inside that same tree.
+        let mut leaves = Vec::with_capacity(block.transactions.len());
+        leaves.push(bitcrab_common::types::hash::Hash256::ZERO);
+        for tx in block.transactions.iter().skip(1) {
+            leaves.push(bitcrab_common::types::hash::Hash256::from_bytes(
+                *tx.wtxid().as_bytes(),
+            ));
+        }
+        let witness_root = crate::signet::merkle_root(leaves);
+
+        let mut preimage = Vec::with_capacity(64);
+        preimage.extend_from_slice(witness_root.as_bytes());
+        preimage.extend_from_slice(&witness[0]);
+        let expected = bitcrab_common::types::hash::hash256(&preimage);
+
+        let script = coinbase.outputs[commitment_index].script_pubkey.as_bytes();
+        if script[6..38] != expected {
+            return Err(ValidationError::WitnessCommitmentMismatch);
+        }
 
         Ok(())
     }
@@ -78,7 +186,7 @@ impl TransactionValidator {
     pub fn contextual_check_transaction_metadata<V: CoinsView>(
         tx: &Transaction,
         view: &V,
-        _height: BlockHeight,
+        height: BlockHeight,
         _params: &ChainParams,
     ) -> Result<(Amount, Vec<bitcrab_common::types::coin::Coin>), ValidationError> {
         // 1. Coinbase transactions skip this
@@ -94,6 +202,16 @@ impl TransactionValidator {
             let coin = view.get_coin(&input.previous_output).ok_or_else(|| {
                 ValidationError::InputMissingOrSpent(input.previous_output.clone())
             })?;
+
+            // Bitcoin Core: `bad-txns-premature-spend-of-coinbase`. A coinbase
+            // is only spendable 100 blocks later, so a reorg cannot invalidate
+            // transactions that already spent a reward that no longer exists.
+            if coin.is_coinbase && height.0.saturating_sub(coin.height.0) < COINBASE_MATURITY {
+                return Err(ValidationError::PrematureCoinbaseSpend {
+                    created: coin.height.0,
+                    spent: height.0,
+                });
+            }
 
             total_input_value = total_input_value
                 .checked_add(coin.output.value)
@@ -177,7 +295,17 @@ impl TransactionValidator {
             Self::check_transaction(tx)?;
         }
 
-        // 5. BIP 325 signet block solution.
+        // 5. Block weight.
+        //
+        // Bitcoin Core: `CheckBlock` — weight is base size counted four times
+        // plus the witness bytes, so a block full of witness data still fits
+        // where an equivalent pre-segwit block would not.
+        let weight = block.weight();
+        if weight > MAX_BLOCK_WEIGHT {
+            return Err(ValidationError::BlockWeightTooLarge(weight));
+        }
+
+        // 6. BIP 325 signet block solution.
         //
         // Bitcoin Core checks this inside CheckBlock, before any chainstate is
         // touched, so an unsigned block can never reach the UTXO set. Gate on
@@ -210,6 +338,14 @@ impl TransactionValidator {
 
         // 1. Header Validation (Difficulty/PoW) - Contextual
         Self::check_block_header(&block.header, index_prev, params, provider)?;
+
+        // 2. Contextual block rules that need the height.
+        if height.0 >= params.consensus.bip34_height {
+            Self::check_bip34_height(block, height)?;
+        }
+        if height.0 >= params.consensus.segwit_height {
+            Self::check_witness_commitment(block)?;
+        }
 
         let mut total_fees = Amount::ZERO;
         let mut block_undo = BlockUndo::new();
@@ -304,7 +440,30 @@ impl TransactionValidator {
             );
         }
 
-        // 6. Set the best block in the view
+        // 6. The coinbase may claim the subsidy plus the fees, and no more.
+        //
+        // Bitcoin Core: `bad-cb-amount` in `ConnectBlock`. This is the rule that
+        // stops a miner minting coins out of nothing; without it every other
+        // check here is decoration.
+        let mut coinbase_value = Amount::ZERO;
+        for output in &coinbase_tx.outputs {
+            coinbase_value = coinbase_value
+                .checked_add(output.value)
+                .ok_or(ValidationError::TotalAmountOutOfRange)?;
+        }
+
+        let allowed = Self::block_subsidy(height, params)
+            .checked_add(total_fees)
+            .ok_or(ValidationError::TotalAmountOutOfRange)?;
+
+        if coinbase_value > allowed {
+            return Err(ValidationError::CoinbaseValueTooHigh {
+                claimed: coinbase_value.to_sat(),
+                allowed: allowed.to_sat(),
+            });
+        }
+
+        // 7. Set the best block in the view
         view.set_best_block(block.header.block_hash(), height.0);
 
         Ok((total_fees, block_undo))
@@ -358,4 +517,24 @@ pub enum ValidationError {
     },
     #[error("signet block solution invalid: {0}")]
     SignetSolution(#[from] crate::signet::SignetError),
+    #[error("transaction spends the same outpoint twice")]
+    DuplicateInput,
+    #[error("coinbase scriptSig length {0} outside the permitted 2..=100")]
+    BadCoinbaseScriptLength(usize),
+    #[error("non-coinbase transaction has a null prevout")]
+    NullPrevout,
+    #[error("coinbase does not encode its height (expected {expected})")]
+    BadCoinbaseHeight { expected: u32 },
+    #[error("coinbase witness nonce must be a single 32-byte item")]
+    BadWitnessNonceSize,
+    #[error("witness commitment does not match the witness merkle root")]
+    WitnessCommitmentMismatch,
+    #[error("block carries witness data but commits to none")]
+    UnexpectedWitness,
+    #[error("block weight {0} exceeds the maximum")]
+    BlockWeightTooLarge(u64),
+    #[error("coinbase claims {claimed} satoshis but only {allowed} are allowed")]
+    CoinbaseValueTooHigh { claimed: u64, allowed: u64 },
+    #[error("coinbase created at height {created} spent at {spent}, before maturity")]
+    PrematureCoinbaseSpend { created: u32, spent: u32 },
 }

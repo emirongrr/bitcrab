@@ -5,6 +5,7 @@
 //! `CTxIn`, `CTxOut`, `CTransaction` in `src/primitives/transaction.h`.
 
 use super::{amount::Amount, hash::Txid, script::ScriptBuf};
+use crate::wire::encode::VarInt;
 use crate::wire::{
     decode::{BitcoinDecode, Decoder},
     encode::{BitcoinEncode, Encoder, VarList},
@@ -139,6 +140,26 @@ pub struct Transaction {
 impl Transaction {
     pub fn is_coinbase(&self) -> bool {
         self.inputs.len() == 1 && self.inputs[0].previous_output.is_coinbase()
+    }
+
+    /// Bytes this transaction contributes that are witness data: the segwit
+    /// marker and flag, plus every input's witness stack.
+    ///
+    /// Bitcoin Core: the difference between `GetSerializeSize` with and without
+    /// witness, which is what `GetTransactionWeight` is built on.
+    pub fn witness_serialized_size(&self) -> usize {
+        if !self.is_segwit() {
+            return 0;
+        }
+        // Marker and flag bytes exist only in the witness serialisation.
+        let mut size = 2;
+        for input in &self.inputs {
+            size += VarInt(input.witness.len() as u64).serialized_size();
+            for item in &input.witness {
+                size += VarInt(item.len() as u64).serialized_size() + item.len();
+            }
+        }
+        size
     }
 
     pub fn is_segwit(&self) -> bool {
