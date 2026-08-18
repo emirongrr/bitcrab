@@ -573,6 +573,17 @@ impl Blockchain {
     /// Retrieves a list of block hashes starting after the given height.
     /// Used by the sync engine to identify blocks that need to be downloaded.
     /// Bitcoin Core Ref: net_processing.cpp FindNextBlocksToDownload
+    /// True when this block's body is not on disk yet, so it is still worth
+    /// requesting.
+    ///
+    /// Bitcoin Core: the `!(pindex->nStatus & BLOCK_HAVE_DATA)` test in
+    /// `FindNextBlocksToDownload`. A read error counts as missing: re-requesting
+    /// is cheap, while silently skipping the block would leave a hole the
+    /// download window never fills.
+    fn needs_block_data(&self, hash: &BlockHash) -> bool {
+        matches!(self.store.get_block(hash), Ok(None) | Err(_))
+    }
+
     pub fn get_next_block_hashes_for_sync(
         &self,
         start_height: u32,
@@ -580,17 +591,20 @@ impl Blockchain {
     ) -> Vec<BlockHash> {
         let chain = self.best_header_chain.read().unwrap();
         let mut hashes = Vec::with_capacity(limit);
+        // The two phases below can propose the same hash, so track what has
+        // been queued. A set rather than `hashes.contains`: the download window
+        // runs to several thousand entries, and a linear scan per candidate
+        // makes filling it quadratic.
+        let mut queued = std::collections::HashSet::with_capacity(limit);
         let first_needed_height = start_height + 1;
 
         // 1. Try to satisfy the window from in-memory cache first
         if (first_needed_height as usize) < chain.len() {
             let end_height = (first_needed_height as usize + limit).min(chain.len());
             for height in (first_needed_height as usize)..end_height {
-                let hash = &chain[height];
-                // Bitcoin Core: only request if we don't have the block data
-                match self.store.get_block(hash) {
-                    Ok(None) | Err(_) => hashes.push(*hash),
-                    _ => {} // Already on disk
+                let hash = chain[height];
+                if self.needs_block_data(&hash) && queued.insert(hash) {
+                    hashes.push(hash);
                 }
             }
         }
@@ -600,16 +614,12 @@ impl Blockchain {
         if hashes.len() < limit {
             let db_start = first_needed_height + hashes.len() as u32;
             for h in db_start..(first_needed_height + limit as u32) {
-                match self.store.get_block_hash_by_header_height(h) {
-                    Ok(Some(hash)) => match self.store.get_block(&hash) {
-                        Ok(None) | Err(_) => {
-                            if !hashes.contains(&hash) {
-                                hashes.push(hash);
-                            }
-                        }
-                        _ => {}
-                    },
-                    _ => break, // No more headers in DB either
+                // No more headers in the DB either.
+                let Ok(Some(hash)) = self.store.get_block_hash_by_header_height(h) else {
+                    break;
+                };
+                if self.needs_block_data(&hash) && queued.insert(hash) {
+                    hashes.push(hash);
                 }
             }
         }
