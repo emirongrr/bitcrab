@@ -35,10 +35,7 @@ pub fn encode_header(magic: Magic, command: &Command, payload: &[u8]) -> [u8; 24
 /// Bitcoin Core: CMessageHeader::IsValid() in src/protocol.cpp
 pub fn decode_header(buf: &[u8; 24], expected_magic: Magic) -> Result<MessageHeader, P2pError> {
     let magic_bytes: [u8; 4] = buf[0..4].try_into().unwrap();
-    let magic = Magic::from_bytes(magic_bytes).ok_or(P2pError::WrongMagic {
-        expected: u32::from_le_bytes(expected_magic.to_bytes()),
-        actual: u32::from_le_bytes(magic_bytes),
-    })?;
+    let magic = Magic::from_bytes(magic_bytes);
 
     if magic != expected_magic {
         return Err(P2pError::WrongMagic {
@@ -47,7 +44,7 @@ pub fn decode_header(buf: &[u8; 24], expected_magic: Magic) -> Result<MessageHea
         });
     }
 
-    let command = Command::from_wire(&buf[4..16].try_into().unwrap());
+    let command = Command::from_wire(&buf[4..16].try_into().unwrap())?;
     let length = u32::from_le_bytes(buf[16..20].try_into().unwrap());
 
     if (length as usize) > MAX_MESSAGE_SIZE {

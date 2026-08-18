@@ -13,9 +13,10 @@ use super::BitcoinMessage;
 use crate::p2p::message::Command;
 use bitcrab_common::constants::{PROTOCOL_VERSION, SERVICES, USER_AGENT};
 use bitcrab_common::wire::{
+    decode_exact,
     encode::{VarStr, U16BE},
     error::DecodeError,
-    Decoder, Encoder,
+    BitcoinDecode, BitcoinEncode, Decoder, Encoder,
 };
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -37,12 +38,12 @@ pub struct Version {
 }
 
 impl Version {
-    pub fn our_version_with_nonce(nonce: u64) -> Self {
-        let mut v = Self::our_version();
+    pub fn our_version_with_nonce(nonce: u64, start_height: i32, relay: bool) -> Self {
+        let mut v = Self::our_version(start_height, relay);
         v.nonce = nonce;
         v
     }
-    pub fn our_version() -> Self {
+    pub fn our_version(start_height: i32, relay: bool) -> Self {
         Self {
             version: PROTOCOL_VERSION,
             services: SERVICES,
@@ -58,8 +59,8 @@ impl Version {
             from_port: 0,
             nonce: make_nonce(),
             user_agent: USER_AGENT.to_string(),
-            start_height: 0,
-            relay: true,
+            start_height,
+            relay,
         }
     }
 }
@@ -68,8 +69,17 @@ impl BitcoinMessage for Version {
     const COMMAND: Command = Command::Version;
 
     fn encode(&self) -> Vec<u8> {
-        Encoder::new()
-            .encode_field(&self.version)
+        Encoder::new().encode_field(self).finish()
+    }
+
+    fn decode(payload: &[u8]) -> Result<Self, DecodeError> {
+        decode_exact::<Self>(payload, "version")
+    }
+}
+
+impl BitcoinEncode for Version {
+    fn encode(&self, enc: Encoder) -> Encoder {
+        enc.encode_field(&self.version)
             .encode_field(&self.services)
             .encode_field(&self.timestamp)
             .encode_field(&self.recv_services)
@@ -82,11 +92,11 @@ impl BitcoinMessage for Version {
             .encode_field(&VarStr(&self.user_agent))
             .encode_field(&self.start_height)
             .encode_field(&self.relay)
-            .finish()
     }
+}
 
-    fn decode(payload: &[u8]) -> Result<Self, DecodeError> {
-        let dec = Decoder::new(payload);
+impl BitcoinDecode for Version {
+    fn decode(dec: Decoder) -> Result<(Self, Decoder), DecodeError> {
         let (version, dec) = dec.decode_field("version")?;
         let (services, dec) = dec.decode_field("services")?;
         let (timestamp, dec) = dec.decode_field("timestamp")?;
@@ -100,24 +110,27 @@ impl BitcoinMessage for Version {
         let (user_agent, dec) = dec.read_var_str("user_agent")?;
         let (start_height, dec) = dec.decode_field("start_height")?;
         // relay is optional — older nodes omit it
-        let (relay, _dec) = dec.decode_optional_field::<bool>();
+        let (relay, dec) = dec.decode_optional_field::<bool>()?;
         let relay = relay.unwrap_or(true);
 
-        Ok(Self {
-            version,
-            services,
-            timestamp,
-            recv_services,
-            recv_addr,
-            recv_port,
-            from_services,
-            from_addr,
-            from_port,
-            nonce,
-            user_agent,
-            start_height,
-            relay,
-        })
+        Ok((
+            Self {
+                version,
+                services,
+                timestamp,
+                recv_services,
+                recv_addr,
+                recv_port,
+                from_services,
+                from_addr,
+                from_port,
+                nonce,
+                user_agent,
+                start_height,
+                relay,
+            },
+            dec,
+        ))
     }
 }
 

@@ -1,65 +1,91 @@
 //! P2P Networking initialization logic for the bitcrab binary.
 
 use std::sync::Arc;
-use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
-use tracing::{info, error};
+use tracing::{error, info};
 
-use bitcrab_common::types::hash::BlockHash;
-use bitcrab_common::types::block::BlockHeight;
+use bitcrab_common::ChainType;
+use bitcrab_net::p2p::peer_manager::ValidationInterface;
 use bitcrab_net::p2p::{
-    addr_man::AddrMan, 
-    dispatcher::DispatcherActor, 
-    message::Magic,
-    peer_manager::PeerManager, 
-    peer_table::PeerTable, 
-    sync::{SyncManager, HeaderSyncMessage},
-    network::{run_p2p_maintenance, NetworkConfig},
-    actor::Actor,
-    initiator::ConnectionInitiator,
+    addr_man::AddrMan, connman::Connman, network::run_p2p_maintenance, peer_manager::PeerManager,
+    peer_table::PeerTable, sync::block_downloader::BlockDownloader, sync::SyncManager,
+    sync::SyncProvider,
 };
+use bitcrab_node::Blockchain;
 use bitcrab_storage::Store;
 
 pub struct P2PContext {
+    pub p2p: Arc<Connman>,
+    pub sync_manager: Arc<SyncManager>,
     pub peer_manager: Arc<PeerManager>,
-    pub sync_manager: SyncManager,
 }
 
 /// Initializes the full networking stack.
 pub fn init_p2p(
-    magic: Magic,
-    store: Store,
-    block_notifier: mpsc::Sender<(BlockHash, BlockHeight)>,
+    chain: ChainType,
+    _store: Store,
+    blockchain: Arc<Blockchain>,
     tracker: &TaskTracker,
     cancel_token: CancellationToken,
 ) -> P2PContext {
-    info!("[init] starting networking stack for network: {}", magic);
+    let params = chain.chain_params();
+    let magic = params.magic;
+    info!("[init] starting networking stack for chain: {}", chain);
 
     // 1. Data Structures
-    let table = PeerTable::new(AddrMan::new());
-    
+    let peer_table = PeerTable::new(AddrMan::new());
+
     // 2. Synchronization Layer
-    let sync = SyncManager::new(store.clone(), table.clone(), Some(block_notifier));
-    
-    // 3. Routing Layer
-    let dispatcher = DispatcherActor::new(table.clone(), sync.clone()).spawn();
-    
-    // 4. Peer Management
-    let peer_manager = Arc::new(PeerManager::new(magic, table.clone(), dispatcher).with_sync(sync.clone()));
+    let (headers_tip, headers_height) =
+        bitcrab_net::p2p::sync::SyncProvider::get_headers_tip(blockchain.as_ref());
+    let (blocks_tip, blocks_height) =
+        bitcrab_net::p2p::sync::SyncProvider::get_blocks_tip(blockchain.as_ref());
+
+    info!(
+        "[init] Resuming sync: headers at height {}, blocks at height {}",
+        headers_height, blocks_height
+    );
+
+    // 2.3 Load timestamp for IBD detection
+    let last_header_time = if !headers_tip.is_zero() {
+        blockchain
+            .get_block_index(&headers_tip)
+            .map(|i| i.header.time as u64)
+            .unwrap_or(0)
+    } else {
+        0
+    };
+
+    let sync = Arc::new(SyncManager::with_tips(
+        headers_tip,
+        headers_height,
+        blocks_tip,
+        blocks_height,
+        last_header_time,
+    ));
+
+    // 3. Peer Manager (High-level Protocol/Validation)
+    let peer_manager = Arc::new(PeerManager::new(
+        peer_table.clone(),
+        blockchain.clone() as Arc<dyn ValidationInterface>,
+        sync.clone(),
+    ));
+
+    // 4. P2P Service (Low-level Networking)
+    let p2p = Arc::new(Connman::new(
+        magic,
+        peer_table.clone(),
+        peer_manager.clone(),
+    ));
 
     // 5. P2P Maintenance Task
-    let p2p_manager = Arc::clone(&peer_manager);
-    let p2p_config = match magic {
-        Magic::Mainnet => NetworkConfig::mainnet(),
-        Magic::Signet => NetworkConfig::signet(),
-        _ => NetworkConfig::signet(),
-    };
+    let p2p_maintenance = Arc::clone(&p2p);
 
     let p2p_cancel = cancel_token.clone();
     tracker.spawn(async move {
         tokio::select! {
-            res = run_p2p_maintenance(p2p_manager, p2p_config) => {
+            res = run_p2p_maintenance(p2p_maintenance, chain) => {
                 if let Err(e) = res {
                     error!("P2P maintenance loop failed: {}", e);
                 }
@@ -70,18 +96,21 @@ pub fn init_p2p(
         }
     });
 
-    // 6. Active Connection Initiator (Target: 8 outbound peers)
-    let initiator_manager = Arc::clone(&peer_manager);
-    let initiator = ConnectionInitiator::new(table, initiator_manager, 8);
-    let _initiator_handle = initiator.spawn();
-    info!("[init] started connection initiator (target: 8)");
-
-    // 6. Optimization: Trigger immediate header sync when first peer connects
-    // This is handled by the HeaderSyncActor's maintenance loop, but we could trigger it pro-actively here
-    // if we added a PeerConnected message to the SyncManager. (To be added if requested).
+    // 6. Block Downloader task
+    let downloader = BlockDownloader::new(peer_table.clone(), sync.clone(), blockchain);
+    let downloader_cancel = cancel_token.clone();
+    tracker.spawn(async move {
+        tokio::select! {
+            _ = downloader.start() => {}
+            _ = downloader_cancel.cancelled() => {
+                info!("[sync] Block Downloader shutting down");
+            }
+        }
+    });
 
     P2PContext {
-        peer_manager,
+        p2p,
         sync_manager: sync,
+        peer_manager,
     }
 }

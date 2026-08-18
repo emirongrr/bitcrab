@@ -136,39 +136,86 @@ impl BlockHeader {
         BlockHash::from_bytes(hash256(&self.serialize()))
     }
 
-    /// Decode the compact `bits` field into a 32-byte big-endian target.
-    ///
-    /// Format: bits[31:24] = exponent, bits[23:0] = mantissa
-    /// Target = mantissa × 256^(exponent - 3)
+    /// Decode the compact `bits` field into a 32-byte target.
     ///
     /// Bitcoin Core: `arith_uint256::SetCompact()` in `src/arith_uint256.cpp`
-    pub fn target(&self) -> [u8; 32] {
-        let exponent = (self.bits >> 24) as usize;
-        let mantissa = self.bits & 0x007F_FFFF;
-        let mut target = [0u8; 32];
-        if exponent == 0 || exponent > 34 {
-            return target;
-        }
-        let pos = 32usize.saturating_sub(exponent);
-        if pos < 32 {
-            target[pos] = ((mantissa >> 16) & 0xFF) as u8;
-        }
-        if pos + 1 < 32 {
-            target[pos + 1] = ((mantissa >> 8) & 0xFF) as u8;
-        }
-        if pos + 2 < 32 {
-            target[pos + 2] = (mantissa & 0xFF) as u8;
-        }
-        target
+    pub fn target(&self) -> Hash256 {
+        Self::bits_to_target(self.bits)
     }
 
-    /// True if hash < target (valid proof-of-work).
+    /// Convert compact bits to a 256-bit target.
+    pub fn bits_to_target(bits: u32) -> Hash256 {
+        let exponent = (bits >> 24) as usize;
+        let mantissa = bits & 0x00FF_FFFF;
+        let mut target = [0u8; 32];
+
+        if exponent == 0 {
+            return Hash256::from_bytes(target);
+        }
+
+        let pos = exponent.saturating_sub(3);
+
+        let m0 = (mantissa & 0xFF) as u8;
+        let m1 = ((mantissa >> 8) & 0xFF) as u8;
+        let m2 = ((mantissa >> 16) & 0xFF) as u8;
+
+        if pos < 32 {
+            target[pos] = m0;
+        }
+        if pos + 1 < 32 {
+            target[pos + 1] = m1;
+        }
+        if pos + 2 < 32 {
+            target[pos + 2] = m2;
+        }
+
+        // Note: Bitcoin's SetCompact also handles a negative sign bit (0x00800000),
+        // but for block targets we assume they are always positive.
+
+        Hash256::from_bytes(target)
+    }
+
+    /// Convert a 256-bit target back to compact bits.
+    pub fn target_to_bits(target: &Hash256) -> u32 {
+        let bytes = target.as_bytes();
+
+        // Find the most significant byte
+        let mut n_size = 32;
+        while n_size > 0 && bytes[n_size - 1] == 0 {
+            n_size -= 1;
+        }
+
+        if n_size == 0 {
+            return 0;
+        }
+
+        let mut exponent = n_size as u32;
+        let mut mantissa: u32;
+
+        if exponent >= 3 {
+            mantissa = (bytes[exponent as usize - 1] as u32) << 16
+                | (bytes[exponent as usize - 2] as u32) << 8
+                | (bytes[exponent as usize - 3] as u32);
+        } else if exponent == 2 {
+            mantissa = (bytes[1] as u32) << 16 | (bytes[0] as u32) << 8;
+        } else {
+            mantissa = (bytes[0] as u32) << 16;
+        }
+
+        // If the 24th bit is set, we must shift right and increment exponent
+        if (mantissa & 0x0080_0000) != 0 {
+            mantissa >>= 8;
+            exponent += 1;
+        }
+
+        (exponent << 24) | mantissa
+    }
+
+    /// True if hash <= target (valid proof-of-work).
     ///
     /// Bitcoin Core: `CheckProofOfWork()` in `src/pow.cpp`
     pub fn meets_target(&self) -> bool {
-        let mut hash_be = *self.block_hash().as_bytes();
-        hash_be.reverse();
-        hash_be.as_slice() < self.target().as_slice()
+        Hash256::from_bytes(*self.block_hash().as_bytes()) <= self.target()
     }
 }
 
@@ -206,6 +253,23 @@ impl Block {
     /// Calculate the Merkle Root of all transactions in this block.
     ///
     /// Bitcoin Core: `ComputeMerkleRoot()` in `src/consensus/merkle.cpp`.
+    /// Block weight in weight units.
+    ///
+    /// Bitcoin Core: `GetBlockWeight()` — base size counted three extra times
+    /// plus the full size, so base bytes cost four weight units each and
+    /// witness bytes cost one. That discount is what lets a segwit block carry
+    /// more data than the old one-megabyte limit while staying bounded.
+    pub fn weight(&self) -> u64 {
+        let total = crate::wire::encode::serialize(self).len() as u64;
+        let witness: u64 = self
+            .transactions
+            .iter()
+            .map(|tx| tx.witness_serialized_size() as u64)
+            .sum();
+        let base = total.saturating_sub(witness);
+        base * 3 + total
+    }
+
     pub fn compute_merkle_root(&self) -> Hash256 {
         if self.transactions.is_empty() {
             return Hash256::ZERO;
@@ -323,6 +387,7 @@ pub enum BlockError {
 pub struct BlockIndex {
     pub header: BlockHeader,
     pub height: BlockHeight,
+    pub chain_work: Hash256,
     pub file_pos: Option<FlatFilePos>,
     pub undo_pos: Option<FlatFilePos>,
 }
@@ -331,6 +396,7 @@ impl BitcoinEncode for BlockIndex {
     fn encode(&self, enc: Encoder) -> Encoder {
         enc.encode_field(&self.header)
             .encode_field(&self.height)
+            .encode_field(&self.chain_work)
             .encode_field(&self.file_pos.is_some())
             .encode_field(&self.file_pos.unwrap_or(FlatFilePos::new(0, 0)))
             .encode_field(&self.undo_pos.is_some())
@@ -342,6 +408,7 @@ impl BitcoinDecode for BlockIndex {
     fn decode(dec: Decoder) -> Result<(Self, Decoder), DecodeError> {
         let (header, dec) = dec.decode_field::<BlockHeader>("BlockIndex::header")?;
         let (height, dec) = dec.decode_field::<BlockHeight>("BlockIndex::height")?;
+        let (chain_work, dec) = dec.decode_field::<Hash256>("BlockIndex::chain_work")?;
 
         let (has_pos, dec) = dec.decode_field::<bool>("BlockIndex::has_pos")?;
         let (pos, dec) = dec.decode_field::<FlatFilePos>("BlockIndex::pos")?;
@@ -355,10 +422,128 @@ impl BitcoinDecode for BlockIndex {
             BlockIndex {
                 header,
                 height,
+                chain_work,
                 file_pos,
                 undo_pos,
             },
             dec,
         ))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Block locator
+// ---------------------------------------------------------------------------
+
+/// Build a Bitcoin block locator for `tip_height`.
+///
+/// A locator is the list of block hashes a peer uses to find the last block we
+/// have in common. It starts dense (the ten most recent blocks) and then steps
+/// back exponentially, always ending at genesis. Sending only the tip hash is
+/// not a valid locator: if the peer does not have that exact block it falls
+/// back to genesis and replies from height 1, which makes both reorg recovery
+/// and resumed sync impossible.
+///
+/// `hash_at_height` resolves a height on the caller's active header chain.
+/// Heights that cannot be resolved are skipped, so a partially populated index
+/// still yields a usable (if sparser) locator.
+///
+/// Bitcoin Core: `GetLocator()` / `CChain::GetLocator()` in `src/chain.cpp`.
+pub fn build_block_locator<F>(tip_height: u32, hash_at_height: F) -> Vec<BlockHash>
+where
+    F: Fn(u32) -> Option<BlockHash>,
+{
+    let mut have = Vec::with_capacity(32);
+    let mut step: u32 = 1;
+    let mut height = tip_height;
+
+    loop {
+        if let Some(hash) = hash_at_height(height) {
+            have.push(hash);
+        }
+
+        if height == 0 {
+            break;
+        }
+
+        // Bitcoin Core: `std::max(height - step, 0)`, then widen the step once
+        // more than 10 entries have been collected. The step is doubled *after*
+        // the next height is computed, which is what puts the first widened gap
+        // at entry 12 rather than entry 11.
+        height = height.saturating_sub(step);
+        if have.len() > 10 {
+            step = step.saturating_mul(2);
+        }
+    }
+
+    have
+}
+
+#[cfg(test)]
+mod locator_tests {
+    use super::*;
+
+    fn hash_for(height: u32) -> BlockHash {
+        let mut bytes = [0u8; 32];
+        bytes[..4].copy_from_slice(&height.to_le_bytes());
+        BlockHash::from_bytes(bytes)
+    }
+
+    fn heights_of(locator: &[BlockHash]) -> Vec<u32> {
+        locator
+            .iter()
+            .map(|hash| u32::from_le_bytes(hash.as_bytes()[..4].try_into().unwrap()))
+            .collect()
+    }
+
+    #[test]
+    fn genesis_only_chain_yields_single_entry() {
+        let locator = build_block_locator(0, |h| Some(hash_for(h)));
+        assert_eq!(heights_of(&locator), vec![0]);
+    }
+
+    #[test]
+    fn short_chain_is_dense_and_ends_at_genesis() {
+        let locator = build_block_locator(5, |h| Some(hash_for(h)));
+        assert_eq!(heights_of(&locator), vec![5, 4, 3, 2, 1, 0]);
+    }
+
+    #[test]
+    fn long_chain_steps_back_exponentially_and_ends_at_genesis() {
+        let locator = build_block_locator(100_000, |h| Some(hash_for(h)));
+        let heights = heights_of(&locator);
+
+        // First eleven entries are consecutive (Core widens only after len > 10).
+        assert_eq!(
+            heights[..11],
+            [
+                100_000, 99_999, 99_998, 99_997, 99_996, 99_995, 99_994, 99_993, 99_992, 99_991,
+                99_990
+            ]
+        );
+        // Then the gap doubles each step.
+        assert_eq!(heights[11], 99_989);
+        assert_eq!(heights[12], 99_987);
+        assert_eq!(heights[13], 99_983);
+        assert_eq!(heights[14], 99_975);
+
+        assert_eq!(*heights.last().unwrap(), 0, "locator must reach genesis");
+        assert!(
+            heights.windows(2).all(|w| w[0] > w[1]),
+            "must be strictly descending"
+        );
+        // Exponential back-off keeps the locator small even for long chains.
+        assert!(heights.len() < 40, "locator too large: {}", heights.len());
+    }
+
+    #[test]
+    fn unresolvable_heights_are_skipped_without_breaking_the_walk() {
+        // Simulate a header index with a hole around height 90.
+        let locator = build_block_locator(100, |h| if h == 90 { None } else { Some(hash_for(h)) });
+        let heights = heights_of(&locator);
+
+        assert!(!heights.contains(&90));
+        assert_eq!(heights[0], 100);
+        assert_eq!(*heights.last().unwrap(), 0);
     }
 }

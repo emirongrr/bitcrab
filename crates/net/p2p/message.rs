@@ -7,6 +7,8 @@
 /// Bitcoin Core: MessageStartChars in src/protocol.h
 pub use bitcrab_common::Magic;
 
+use crate::p2p::errors::P2pError;
+
 /// P2P message command names.
 ///
 /// Bitcoin Core: NetMsgType constants in src/protocol.h
@@ -28,14 +30,37 @@ pub enum Command {
     SendHeaders,
     FeeFilter,
     SendCmpct,
+    NotFound,
     Unknown(String),
 }
 
 impl Command {
-    pub fn from_wire(bytes: &[u8; 12]) -> Self {
+    pub fn from_wire(bytes: &[u8; 12]) -> Result<Self, P2pError> {
         let end = bytes.iter().position(|&b| b == 0).unwrap_or(12);
-        let s = std::str::from_utf8(&bytes[..end]).unwrap_or("");
-        match s {
+        if end == 0 {
+            return Err(P2pError::MalformedCommand {
+                bytes: *bytes,
+                reason: "empty command",
+            });
+        }
+        if bytes[end..].iter().any(|&b| b != 0) {
+            return Err(P2pError::MalformedCommand {
+                bytes: *bytes,
+                reason: "non-null byte after command terminator",
+            });
+        }
+        if bytes[..end].iter().any(|&b| !(0x20..=0x7e).contains(&b)) {
+            return Err(P2pError::MalformedCommand {
+                bytes: *bytes,
+                reason: "command contains non-printable ascii",
+            });
+        }
+
+        let s = std::str::from_utf8(&bytes[..end]).map_err(|_| P2pError::MalformedCommand {
+            bytes: *bytes,
+            reason: "command is not utf-8",
+        })?;
+        Ok(match s {
             "version" => Command::Version,
             "verack" => Command::Verack,
             "ping" => Command::Ping,
@@ -52,8 +77,9 @@ impl Command {
             "sendheaders" => Command::SendHeaders,
             "feefilter" => Command::FeeFilter,
             "sendcmpct" => Command::SendCmpct,
+            "notfound" => Command::NotFound,
             other => Command::Unknown(other.to_string()),
-        }
+        })
     }
 
     pub fn to_wire(&self) -> [u8; 12] {
@@ -82,6 +108,7 @@ impl Command {
             Command::SendHeaders => "sendheaders",
             Command::FeeFilter => "feefilter",
             Command::SendCmpct => "sendcmpct",
+            Command::NotFound => "notfound",
             Command::Unknown(s) => s.as_str(),
         }
     }

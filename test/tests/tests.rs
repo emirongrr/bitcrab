@@ -1,3 +1,5 @@
+mod networking_tests;
 mod node;
-mod p2p;
 mod storage;
+mod types;
+mod wire;

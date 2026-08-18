@@ -118,7 +118,7 @@ fn block_file_info_serialization_length() {
 #[test]
 fn write_and_read_block_roundtrip() {
     let dir = test_dir();
-    let mut mgr = BlockFileManager::new(&dir, Magic::Regtest, 0).unwrap();
+    let mut mgr = BlockFileManager::new(&dir, Magic::REGTEST, 0).unwrap();
 
     let block = b"fake_block_payload";
     let pos = mgr.write_block(block).unwrap();
@@ -139,7 +139,7 @@ fn write_and_read_block_roundtrip() {
 #[test]
 fn write_and_read_multiple_blocks() {
     let dir = test_dir();
-    let mut mgr = BlockFileManager::new(&dir, Magic::Regtest, 0).unwrap();
+    let mut mgr = BlockFileManager::new(&dir, Magic::REGTEST, 0).unwrap();
 
     let blocks = vec![
         b"block_1".to_vec(),
@@ -165,7 +165,7 @@ fn write_and_read_multiple_blocks() {
 #[test]
 fn write_and_read_undo_roundtrip() {
     let dir = test_dir();
-    let mut mgr = BlockFileManager::new(&dir, Magic::Regtest, 0).unwrap();
+    let mut mgr = BlockFileManager::new(&dir, Magic::REGTEST, 0).unwrap();
 
     mgr.write_block(b"block").unwrap();
 
@@ -181,7 +181,7 @@ fn write_and_read_undo_roundtrip() {
 #[test]
 fn write_multiple_undo_records() {
     let dir = test_dir();
-    let mut mgr = BlockFileManager::new(&dir, Magic::Regtest, 0).unwrap();
+    let mut mgr = BlockFileManager::new(&dir, Magic::REGTEST, 0).unwrap();
 
     mgr.write_block(b"block").unwrap();
 
@@ -212,7 +212,7 @@ fn write_multiple_undo_records() {
 #[test]
 fn file_rotates_at_max_size() {
     let dir = test_dir();
-    let mut mgr = BlockFileManager::new(&dir, Magic::Regtest, 0).unwrap();
+    let mut mgr = BlockFileManager::new(&dir, Magic::REGTEST, 0).unwrap();
 
     // Ensure first file exists by writing a small block
     mgr.write_block(b"init")
@@ -221,9 +221,7 @@ fn file_rotates_at_max_size() {
     // Now simulate being near the limit
     mgr.current_size = bitcrab_common::constants::MAX_BLOCK_FILE_SIZE - 10;
 
-    let pos = mgr
-        .write_block(&vec![0u8; 100])
-        .expect("Failed to write block");
+    let pos = mgr.write_block(&[0u8; 100]).expect("Failed to write block");
     assert_eq!(pos.file, 1, "should have rotated to file 1");
     // Verify file 1 exists
     let file1 = dir.join("blocks").join("blk00001.dat");
@@ -235,7 +233,7 @@ fn file_rotates_at_max_size() {
 #[test]
 fn current_file_state() {
     let dir = test_dir();
-    let mgr = BlockFileManager::new(&dir, Magic::Regtest, 0).unwrap();
+    let mgr = BlockFileManager::new(&dir, Magic::REGTEST, 0).unwrap();
     assert_eq!(mgr.current_file(), 0);
 
     fs::remove_dir_all(&dir).ok();
@@ -247,13 +245,13 @@ fn resume_from_existing_file() {
 
     // Write to file 0
     {
-        let mut mgr = BlockFileManager::new(&dir, Magic::Regtest, 0).unwrap();
+        let mut mgr = BlockFileManager::new(&dir, Magic::REGTEST, 0).unwrap();
         mgr.write_block(b"first_block").unwrap();
     }
 
     // Resume with file 0
     {
-        let mut mgr = BlockFileManager::new(&dir, Magic::Regtest, 0).unwrap();
+        let mut mgr = BlockFileManager::new(&dir, Magic::REGTEST, 0).unwrap();
         assert_eq!(mgr.current_file(), 0);
         let pos = mgr.write_block(b"second_block").unwrap();
         assert_eq!(pos.file, 0);
@@ -261,7 +259,7 @@ fn resume_from_existing_file() {
 
     // Resume with file 2 (skip 1)
     {
-        let _mgr = BlockFileManager::new(&dir, Magic::Regtest, 2).unwrap();
+        let _mgr = BlockFileManager::new(&dir, Magic::REGTEST, 2).unwrap();
         assert_eq!(_mgr.current_file(), 2);
     }
 
@@ -272,7 +270,7 @@ fn resume_from_existing_file() {
 
 #[test]
 fn magic_encode_decode_roundtrip() {
-    let magic = Magic::Mainnet;
+    let magic = Magic::MAINNET;
     let bytes = Encoder::new().encode_field(&magic).finish();
     let (decoded, dec) = Magic::decode(Decoder::new(&bytes)).unwrap();
     dec.finish("Magic").unwrap();
@@ -281,19 +279,19 @@ fn magic_encode_decode_roundtrip() {
 
 #[test]
 fn magic_bytes_all_networks() {
-    assert_eq!(Magic::Mainnet.to_bytes(), [0xF9, 0xBE, 0xB4, 0xD9]);
-    assert_eq!(Magic::Testnet3.to_bytes(), [0x0B, 0x11, 0x09, 0x07]);
-    assert_eq!(Magic::Signet.to_bytes(), [0x0A, 0x03, 0xCF, 0x40]);
-    assert_eq!(Magic::Regtest.to_bytes(), [0xFA, 0xBF, 0xB5, 0xDA]);
+    assert_eq!(Magic::MAINNET.to_bytes(), [0xF9, 0xBE, 0xB4, 0xD9]);
+    assert_eq!(Magic::TESTNET3.to_bytes(), [0x0B, 0x11, 0x09, 0x07]);
+    assert_eq!(Magic::SIGNET.to_bytes(), [0x0A, 0x03, 0xCF, 0x40]);
+    assert_eq!(Magic::REGTEST.to_bytes(), [0xFA, 0xBF, 0xB5, 0xDA]);
 }
 
 #[test]
 fn magic_different_networks_preserved() {
     let networks = vec![
-        Magic::Mainnet,
-        Magic::Testnet3,
-        Magic::Signet,
-        Magic::Regtest,
+        Magic::MAINNET,
+        Magic::TESTNET3,
+        Magic::SIGNET,
+        Magic::REGTEST,
     ];
 
     for magic in networks {
@@ -308,7 +306,7 @@ fn magic_different_networks_preserved() {
 #[test]
 fn empty_block_write_and_read() {
     let dir = test_dir();
-    let mut mgr = BlockFileManager::new(&dir, Magic::Regtest, 0).unwrap();
+    let mut mgr = BlockFileManager::new(&dir, Magic::REGTEST, 0).unwrap();
 
     let empty = b"";
     let pos = mgr.write_block(empty).unwrap();
@@ -321,7 +319,7 @@ fn empty_block_write_and_read() {
 #[test]
 fn large_block_write_and_read() {
     let dir = test_dir();
-    let mut mgr = BlockFileManager::new(&dir, Magic::Regtest, 0).unwrap();
+    let mut mgr = BlockFileManager::new(&dir, Magic::REGTEST, 0).unwrap();
 
     let large_block = vec![0xAB; 1024 * 1024]; // 1 MiB
     let pos = mgr.write_block(&large_block).unwrap();
@@ -338,13 +336,13 @@ fn different_magic_bytes_cross_network() {
 
     // Write with MAINNET magic
     {
-        let mut mgr = BlockFileManager::new(&dir, Magic::Mainnet, 0).unwrap();
+        let mut mgr = BlockFileManager::new(&dir, Magic::MAINNET, 0).unwrap();
         mgr.write_block(b"mainnet_block").unwrap();
     }
 
     // Read with same magic should work
     {
-        let mgr = BlockFileManager::new(&dir, Magic::Mainnet, 0).unwrap();
+        let mgr = BlockFileManager::new(&dir, Magic::MAINNET, 0).unwrap();
         let pos = FlatFilePos::new(0, 8); // Skip header
         let block = mgr.read_block(pos).unwrap();
         assert_eq!(&block, b"mainnet_block");
@@ -356,7 +354,7 @@ fn different_magic_bytes_cross_network() {
 #[test]
 fn flush_operations() {
     let dir = test_dir();
-    let mut mgr = BlockFileManager::new(&dir, Magic::Regtest, 0).unwrap();
+    let mut mgr = BlockFileManager::new(&dir, Magic::REGTEST, 0).unwrap();
 
     mgr.write_block(b"test_block").unwrap();
 

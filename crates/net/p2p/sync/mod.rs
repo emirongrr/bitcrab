@@ -1,49 +1,22 @@
-pub mod blocks;
-pub mod headers;
+pub mod block_downloader;
+pub mod sync_manager;
 
-use crate::p2p::actor::{Actor, ActorRef};
-use crate::p2p::peer_table::PeerTable;
-use bitcrab_storage::Store;
-use std::sync::Arc;
+use bitcrab_common::types::block::BlockIndex;
+use bitcrab_common::types::hash::BlockHash;
 
-pub use blocks::{BlockDownloadActor, BlockDownloadMessage};
-pub use headers::{HeaderSyncActor, HeaderSyncMessage};
-
-/// Top-level synchronization manager (Supervisor).
-#[derive(Clone)]
-pub struct SyncManager {
-    pub headers: ActorRef<HeaderSyncMessage>,
-    pub blocks: ActorRef<BlockDownloadMessage>,
+pub trait SyncProvider: Send + Sync {
+    fn get_next_block_hashes(&self, start_height: u32, limit: usize) -> Vec<BlockHash>;
+    /// Build a block locator ending at genesis, rooted at `tip`.
+    ///
+    /// Bitcoin Core: `GetLocator()` in `src/chain.cpp`.
+    fn get_block_locator(&self, tip: &BlockHash) -> Vec<BlockHash>;
+    fn get_block_index(&self, hash: &BlockHash) -> Option<BlockIndex>;
+    fn has_next_block_on_disk(&self, start_height: u32) -> bool;
+    fn get_blocks_tip(&self) -> (BlockHash, u32);
+    fn get_headers_tip(&self) -> (BlockHash, u32);
+    fn activate_best_chain(&self) -> BoxFuture<'_, Result<(), String>>;
 }
 
-impl SyncManager {
-    pub fn new(
-        store: Store,
-        peer_table: PeerTable,
-        notifier: Option<
-            tokio::sync::mpsc::Sender<(
-                bitcrab_common::types::hash::BlockHash,
-                bitcrab_common::types::block::BlockHeight,
-            )>,
-        >,
-    ) -> Self {
-        // 1. Create BlockDownloadActor first so headers can refer to it
-        let mut block_actor = BlockDownloadActor::new(store.clone(), peer_table.clone());
-        if let Some(tx) = notifier {
-            block_actor = block_actor.with_notifier(tx);
-        }
-        let blocks = block_actor.spawn();
+use futures::future::BoxFuture;
 
-        // 2. Create HeaderSyncActor with a reference to the block actor
-        let headers = HeaderSyncActor::new(store, peer_table, blocks.clone()).spawn();
-
-        Self { headers, blocks }
-    }
-
-    /// Notify the sync system that a new peer is available and ready for protocol messages.
-    pub async fn notify_peer_connected(&self, peer: crate::p2p::peer::PeerHandle) {
-        let _ = self.headers.cast(HeaderSyncMessage::PeerConnected(peer.clone())).await;
-        // CRITICAL FIX: Also notify block downloader about the new peer
-        let _ = self.blocks.cast(BlockDownloadMessage::PeerConnected(peer)).await;
-    }
-}
+pub use sync_manager::SyncManager;

@@ -25,9 +25,10 @@ In Bitcoin Core, coins are keyed by their `OutPoint` (TxID + Vout).
 I have implemented a high-speed UTXO management system using RocksDB and an actor-based mutation pipeline.
 
 ### 1. Storage Schema
-Bitcrab mirrors the `C` prefix in the `utxos` table.
+Bitcrab stores coins in a dedicated RocksDB table.
 - **Key**: `C` + `32-byte TxID` + `4-byte vout`.
-- **Serialization**: I use the same compression logic as Bitcoin Core for the `Coin` records, ensuring that Bitcrab's data directory remains compact even at scale.
+- **Serialization**: Bitcrab's current Coin encoding is internal and is not
+  claimed to be byte-compatible with Bitcoin Core's chainstate database.
 
 ### 2. Atomic Batch Updates
 To maintain integrity during high-speed header/block sync, I use the `StorageWorker` to perform batch updates.
@@ -44,4 +45,5 @@ graph LR
 1.  **Bitcrab-Consensus Integration**: I pass the UTXO set context into the consensus engine to verify that signatures match the `scriptPubKey` retrieved from the database.
 2.  **Maturity Checks**: I ensure that coinbase outputs are only spent after the 100-block maturity window as per the Consensus rules documented in [validation.md](../consensus/validation.md).
 
-By strictly following the Core data format, I ensure that Bitcrab can serve as a reliable foundation for auditing and building blockchain services.
+The cache and persistence behavior target Core equivalence, but Bitcrab and
+Bitcoin Core data directories are not interchangeable.

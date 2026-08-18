@@ -6,6 +6,7 @@
 //! Bitcoin Core uses uint256 for everything. We use distinct types.
 
 use ripemd::Ripemd160;
+use sha1::Sha1;
 use sha2::{Digest, Sha256};
 use std::fmt;
 use std::str::FromStr;
@@ -32,6 +33,29 @@ pub fn hash160(data: &[u8]) -> [u8; 20] {
     ripe.into()
 }
 
+/// Single SHA-256.
+///
+/// Bitcoin Core: `CSHA256`. Used by `OP_SHA256` and by BIP 141's P2WSH
+/// program, which is a *single* SHA-256 rather than the usual double hash.
+pub fn sha256(data: &[u8]) -> [u8; 32] {
+    Sha256::digest(data).into()
+}
+
+/// Single RIPEMD-160.
+///
+/// Bitcoin Core: `CRIPEMD160`. Used by `OP_RIPEMD160`.
+pub fn ripemd160(data: &[u8]) -> [u8; 20] {
+    Ripemd160::digest(data).into()
+}
+
+/// SHA-1.
+///
+/// Bitcoin Core: `CSHA1`. Used only by `OP_SHA1`. SHA-1 is cryptographically
+/// broken, but the opcode is consensus and must keep working.
+pub fn sha1(data: &[u8]) -> [u8; 20] {
+    Sha1::digest(data).into()
+}
+
 // ---------------------------------------------------------------------------
 // Hash256
 // ---------------------------------------------------------------------------
@@ -41,8 +65,34 @@ pub fn hash160(data: &[u8]) -> [u8; 20] {
 /// Used for: block hashes, txids, merkle nodes, sighash digests.
 /// Bitcoin Core: uint256 in src/uint256.h — but used for everything.
 /// We use distinct types to prevent mixing at compile time.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct Hash256([u8; 32]);
+
+impl fmt::Debug for Hash256 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self)
+    }
+}
+
+impl PartialOrd for Hash256 {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Hash256 {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        // Bitcoin Core: Numerical comparison of Little-Endian uint256
+        // Compare from MSB (index 31) to LSB (index 0)
+        for i in (0..32).rev() {
+            match self.0[i].cmp(&other.0[i]) {
+                std::cmp::Ordering::Equal => continue,
+                non_equal => return non_equal,
+            }
+        }
+        std::cmp::Ordering::Equal
+    }
+}
 
 impl Hash256 {
     pub fn from_bytes(bytes: [u8; 32]) -> Self {
@@ -65,11 +115,10 @@ impl Hash256 {
     pub const fn zero() -> Self {
         Self::ZERO
     }
-}
 
-impl fmt::Debug for Hash256 {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Hash256({})", hex::encode(self.0))
+    pub fn from_hex_be(s: &str) -> Self {
+        use std::str::FromStr;
+        Self::from_str(s).expect("Invalid hex in hardcoded params")
     }
 }
 
@@ -95,6 +144,21 @@ impl FromStr for Hash256 {
     }
 }
 
+impl crate::wire::encode::BitcoinEncode for Hash256 {
+    fn encode(&self, enc: crate::wire::encode::Encoder) -> crate::wire::encode::Encoder {
+        enc.push_bytes(&self.0)
+    }
+}
+
+impl crate::wire::decode::BitcoinDecode for Hash256 {
+    fn decode(
+        dec: crate::wire::decode::Decoder,
+    ) -> Result<(Self, crate::wire::decode::Decoder), crate::wire::error::DecodeError> {
+        let (bytes, dec) = dec.decode_field::<[u8; 32]>("Hash256")?;
+        Ok((Self(bytes), dec))
+    }
+}
+
 // ---------------------------------------------------------------------------
 // BlockHash
 // ---------------------------------------------------------------------------
@@ -103,8 +167,20 @@ impl FromStr for Hash256 {
 ///
 /// Distinct from Txid — the compiler prevents mixing these two.
 /// Bitcoin Core uses uint256 for both, which caused real bugs historically.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct BlockHash([u8; 32]);
+
+impl PartialOrd for BlockHash {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for BlockHash {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        Hash256::from_bytes(self.0).cmp(&Hash256::from_bytes(other.0))
+    }
+}
 
 impl BlockHash {
     pub fn from_bytes(bytes: [u8; 32]) -> Self {
@@ -126,6 +202,11 @@ impl BlockHash {
     pub const ZERO: Self = Self([0u8; 32]);
     pub const fn zero() -> Self {
         Self::ZERO
+    }
+
+    pub fn from_hex_be(s: &str) -> Self {
+        use std::str::FromStr;
+        Self::from_str(s).expect("Invalid hex in hardcoded params")
     }
 }
 
@@ -165,8 +246,20 @@ impl FromStr for BlockHash {
 ///
 /// Not the same as wtxid (which includes witness data).
 /// Bitcoin Core: uint256 — same type as BlockHash, which caused bugs.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct Txid([u8; 32]);
+
+impl PartialOrd for Txid {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Txid {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        Hash256::from_bytes(self.0).cmp(&Hash256::from_bytes(other.0))
+    }
+}
 
 impl Txid {
     pub fn from_bytes(bytes: [u8; 32]) -> Self {
@@ -188,6 +281,11 @@ impl Txid {
     pub const ZERO: Self = Self([0u8; 32]);
     pub const fn zero() -> Self {
         Self::ZERO
+    }
+
+    pub fn from_hex_be(s: &str) -> Self {
+        use std::str::FromStr;
+        Self::from_str(s).expect("Invalid hex in hardcoded params")
     }
 }
 

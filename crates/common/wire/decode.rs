@@ -35,8 +35,11 @@
 //! ```
 
 use super::error::DecodeError;
+use crate::types::constants::MAX_MESSAGE_SIZE;
 use crate::wire::encode::VarInt;
 use crate::wire::encode::U16BE;
+
+const MAX_WIRE_ALLOCATION: usize = MAX_MESSAGE_SIZE;
 
 /// Every type that can be decoded from Bitcoin wire format.
 ///
@@ -86,16 +89,20 @@ impl<'a> Decoder<'a> {
         T::decode(self)
     }
 
-    /// Decode an optional field — returns None if no bytes remain.
+    /// Peek at the next byte without consuming it.
+    pub fn peek_u8(self, field: &'static str) -> Result<u8, DecodeError> {
+        self.require(1, field)?;
+        Ok(self.data[self.pos])
+    }
+
+    /// Decode an optional field — returns None only if no bytes remain.
     ///
-    pub fn decode_optional_field<T: BitcoinDecode>(self) -> (Option<T>, Self) {
+    pub fn decode_optional_field<T: BitcoinDecode>(self) -> Result<(Option<T>, Self), DecodeError> {
         if self.is_done() {
-            return (None, self);
+            return Ok((None, self));
         }
-        match T::decode(self) {
-            Ok((v, dec)) => (Some(v), dec),
-            Err(_) => unreachable!(), // only called when bytes remain
-        }
+        let (v, dec) = T::decode(self)?;
+        Ok((Some(v), dec))
     }
 
     /// True if all bytes have been consumed.
@@ -196,8 +203,7 @@ impl<'a> Decoder<'a> {
     ///
     /// Bitcoin Core: `ReadCompactSize()` in src/serialize.h
     pub fn read_varint(mut self, field: &'static str) -> Result<(u64, Self), DecodeError> {
-        let (v, consumed) = read_varint_raw(&self.data[self.pos..])
-            .ok_or(DecodeError::TruncatedVarint { field })?;
+        let (v, consumed) = read_varint_raw(&self.data[self.pos..], field)?;
         self.pos += consumed;
         Ok((v, self))
     }
@@ -205,6 +211,7 @@ impl<'a> Decoder<'a> {
     /// Read a VarInt-prefixed byte array.
     pub fn read_varbytes(self, label: &'static str) -> Result<(Vec<u8>, Self), DecodeError> {
         let (len, dec) = self.read_varint(label)?;
+        ensure_allocation_len(label, len)?;
         dec.read_bytes(len as usize, label)
     }
 
@@ -214,6 +221,14 @@ impl<'a> Decoder<'a> {
         label: &'static str,
     ) -> Result<(Vec<T>, Self), DecodeError> {
         let (count, mut dec) = self.read_varint(label)?;
+        ensure_allocation_len(label, count)?;
+        if count as usize > dec.remaining() {
+            return Err(DecodeError::AllocationTooLarge {
+                field: label,
+                len: count,
+                limit: dec.remaining(),
+            });
+        }
         let mut items = Vec::with_capacity(count as usize);
         for _ in 0..count {
             let (item, next_dec) = T::decode(dec)?;
@@ -236,9 +251,9 @@ impl<'a> Decoder<'a> {
 
     /// Read varint(len) + len bytes as UTF-8 string.
     pub fn read_var_str(mut self, field: &'static str) -> Result<(String, Self), DecodeError> {
-        let (len, consumed) = read_varint_raw(&self.data[self.pos..])
-            .ok_or(DecodeError::TruncatedVarint { field })?;
+        let (len, consumed) = read_varint_raw(&self.data[self.pos..], field)?;
         self.pos += consumed;
+        ensure_allocation_len(field, len)?;
         let len = len as usize;
         self.require(len, field)?;
         let s = std::str::from_utf8(&self.data[self.pos..self.pos + len])
@@ -322,28 +337,76 @@ impl BitcoinDecode for Vec<u8> {
 // Varint helper
 // ---------------------------------------------------------------------------
 
-pub(crate) fn read_varint_raw(buf: &[u8]) -> Option<(u64, usize)> {
-    match buf.first()? {
-        &n @ 0x00..=0xFC => Some((n as u64, 1)),
+pub(crate) fn read_varint_raw(
+    buf: &[u8],
+    field: &'static str,
+) -> Result<(u64, usize), DecodeError> {
+    match buf.first().ok_or(DecodeError::TruncatedVarint { field })? {
+        &n @ 0x00..=0xFC => Ok((n as u64, 1)),
         0xFD => {
             if buf.len() < 3 {
-                return None;
+                return Err(DecodeError::TruncatedVarint { field });
             }
-            Some((u16::from_le_bytes(buf[1..3].try_into().unwrap()) as u64, 3))
+            let value = u16::from_le_bytes(buf[1..3].try_into().unwrap()) as u64;
+            if value < 0xFD {
+                return Err(DecodeError::NonCanonicalVarint {
+                    field,
+                    value,
+                    encoded_len: 3,
+                });
+            }
+            Ok((value, 3))
         }
         0xFE => {
             if buf.len() < 5 {
-                return None;
+                return Err(DecodeError::TruncatedVarint { field });
             }
-            Some((u32::from_le_bytes(buf[1..5].try_into().unwrap()) as u64, 5))
+            let value = u32::from_le_bytes(buf[1..5].try_into().unwrap()) as u64;
+            if value < 0x1_0000 {
+                return Err(DecodeError::NonCanonicalVarint {
+                    field,
+                    value,
+                    encoded_len: 5,
+                });
+            }
+            Ok((value, 5))
         }
         0xFF => {
             if buf.len() < 9 {
-                return None;
+                return Err(DecodeError::TruncatedVarint { field });
             }
-            Some((u64::from_le_bytes(buf[1..9].try_into().unwrap()), 9))
+            let value = u64::from_le_bytes(buf[1..9].try_into().unwrap());
+            if value < 0x1_0000_0000 {
+                return Err(DecodeError::NonCanonicalVarint {
+                    field,
+                    value,
+                    encoded_len: 9,
+                });
+            }
+            Ok((value, 9))
         }
     }
+}
+
+fn ensure_allocation_len(field: &'static str, len: u64) -> Result<(), DecodeError> {
+    if len > MAX_WIRE_ALLOCATION as u64 || len > usize::MAX as u64 {
+        return Err(DecodeError::AllocationTooLarge {
+            field,
+            len,
+            limit: MAX_WIRE_ALLOCATION,
+        });
+    }
+    Ok(())
+}
+
+/// Decode a value and require that the whole payload was consumed.
+pub fn decode_exact<T: BitcoinDecode>(
+    payload: &[u8],
+    context: &'static str,
+) -> Result<T, DecodeError> {
+    let (value, dec) = T::decode(Decoder::new(payload))?;
+    dec.finish(context)?;
+    Ok(value)
 }
 
 // ---------------------------------------------------------------------------

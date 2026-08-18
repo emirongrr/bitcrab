@@ -13,6 +13,8 @@ use bitcrab_common::wire::{
 
 use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 
+const MAX_ADDR_ENTRIES: usize = 1_000;
+
 /// Network address information shared in an `addr` message.
 ///
 /// Bitcoin Core: CAddress
@@ -90,14 +92,22 @@ impl BitcoinMessage for Addr {
     fn decode(payload: &[u8]) -> Result<Self, DecodeError> {
         let dec = Decoder::new(payload);
         let (count, mut dec) = dec.read_varint("count")?;
+        if count as usize > MAX_ADDR_ENTRIES {
+            return Err(DecodeError::AllocationTooLarge {
+                field: "count",
+                len: count,
+                limit: MAX_ADDR_ENTRIES,
+            });
+        }
 
-        let mut addresses = Vec::with_capacity(count.min(1000) as usize);
+        let mut addresses = Vec::with_capacity(count as usize);
         for _ in 0..count {
             let (addr, d) = NetAddr::decode(dec)?;
             addresses.push(addr);
             dec = d;
         }
 
+        dec.finish("addr")?;
         Ok(Self { addresses })
     }
 }
@@ -116,10 +126,7 @@ impl BitcoinMessage for GetAddr {
     }
 
     fn decode(payload: &[u8]) -> Result<Self, DecodeError> {
-        if !payload.is_empty() {
-            // Some implementations might send a payload, but protocol dictates empty.
-            // We ignore trailing bytes generally, but strictly it has no fields.
-        }
+        Decoder::new(payload).finish("getaddr")?;
         Ok(Self)
     }
 }

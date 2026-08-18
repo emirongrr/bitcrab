@@ -1,56 +1,70 @@
-# Architectural Overview
+# Architecture
 
-Bitcrab is built on a high-concurrency, message-passing architecture inspired by the Actor Model. This ensures that CPU-bound validation, disk-bound storage, and I/O-bound networking work in harmony without blocking each other.
+## Design Authority
 
-## Crate Structure
+Bitcoin Core C++ is the behavioral reference for Bitcoin consensus, P2P,
+chain selection, and durability. Bitcrab's internal boundaries may differ, but
+normal node execution must remain Bitcoin-compatible.
 
-The project is organized into modular crates to enforce clean boundaries and facilitate testing.
+Research execution is isolated from production Bitcoin validation. Modeled,
+synthetic, or counterfactual PQ rules must never be selected implicitly by the
+normal node path.
+
+## Crate Boundaries
 
 | Crate | Responsibility |
-| :--- | :--- |
-| `bitcrab` | The main binary entry point (CLI and initialization). |
-| `bitcrab-common` | Core Bitcoin types: Blocks, Transactions, Script, and Hashing. |
-| `bitcrab-net` | P2P protocol, Peer Management, and Synchronization Actors. |
-| `bitcrab-storage` | Persistence layer: RocksDB indexing and flat-file block storage. |
-| `bitcrab-consensus` | Implementation of Bitcoin's consensus rules and script execution. |
-| `bitcrab-monitor` | TUI (Terminal User Interface) for real-time node observation. |
+| --- | --- |
+| `bitcrab-common` | Bitcoin primitives, chain parameters, and wire encoding |
+| `bitcrab-consensus` | Stateless and contextual Bitcoin validation |
+| `bitcrab-script` | Script execution, signature backends, and pure research models |
+| `bitcrab-net` | P2P framing, connection lifecycle, peers, and synchronization |
+| `bitcrab-storage` | Keyed state and flat block/undo files |
+| `bitcrab-node` | Adapters and composition between consensus, storage, and P2P |
+| `bitcrab-rpc` | RPC methods over node interfaces |
+| `bitcrab` | CLI, configuration, startup, shutdown, and research commands |
 
----
+Consensus does not depend on networking. Research models do not mutate
+chainstate. The node crate owns adapters between otherwise independent
+components.
 
-## The Actor System
+## Runtime Ownership
 
-Bitcrab uses specialized actors for critical network and node tasks. Communication happens via asynchronous channels (MPSC).
+- Peer connection tasks own socket I/O.
+- Peer and sync managers own bounded network state.
+- Header and block validation preserve parent-before-child ordering.
+- Chainstate owns active-chain mutation and the long-lived UTXO cache.
+- Storage owns ordered flat-file and database writes.
+- RPC reads through stable node and storage interfaces.
 
-### 1. PeerManager
-Oversees all incoming and outgoing TCP connections. It validates the network magic, handles handshakes, and serves as the gateway for all protocol messages.
+Expensive cryptographic validation may run concurrently, but result commitment
+remains ordered and bounded. Shared mutexes should protect short metadata
+operations, never socket I/O, database work, or signature verification.
 
-### 2. HeaderSyncActor & BlockDownloadActor
-These two actors work in a decoupled pipeline:
-- **HeaderSync**: Focuses on fetching 80-byte header chains as fast as possible to build the "map" of the blockchain.
-- **BlockDownload**: Once headers are known, this actor pulls full block bodies from multiple peers in parallel.
+## Research Boundary
 
-### 3. StorageWorker
-A dedicated background worker that serializes all disk mutations. By using a single worker for writes, we ensure atomic updates to the UTXO set and block files without complex database locking.
-
----
-
-## Data Flow
-
-```mermaid
-graph TD
-    A[Remote Peer] <-->|P2P Messages| B[PeerManager]
-    B -->|Headers| C[HeaderSyncActor]
-    B -->|Block Body| D[BlockDownloadActor]
-    C -->|New Tip| E[StorageWorker]
-    D -->|Persist Block| E
-    E <-->|RocksDB| F[(Metadata & UTXOs)]
-    E <-->|blk*.dat| G[(Raw Blocks)]
-    H[RPC Server] <-->|Query| F
-    H <-->|Query| G
+```text
+Bitcoin decoder and chain data
+            |
+            +--> Bitcoin consensus execution
+            |
+            +--> Research replay and classification
+                      |
+                      +--> modeled authorization profiles
+                      +--> measured signature backends
+                      +--> synthetic ownership oracle
+                      +--> counterfactual PQ chain
 ```
+
+Research reports carry an immutable manifest identity and label fields as
+modeled, measured, or synthetic. Real PQ backends remain optional and
+research-only until they pass official known-answer tests and independent
+differential verification.
 
 ## Performance Principles
 
-1.  **Non-blocking I/O**: All networking is handled via `tokio` asynchronous runtimes.
-2.  **Zero-copy**: Bitcoin messages are encoded/decoded using efficient byte-oriented buffers.
-3.  **Read/Write Split**: Storage reads are performed directly via thread-safe `Store` handles, while writes are queued to the `StorageWorker`, maximizing throughput.
+- Bound queues, caches, and in-flight work.
+- Keep network reads independent from validation latency.
+- Batch sequential database work without weakening durability boundaries.
+- Measure cache hit rate, queue depth, storage stalls, and validation latency.
+- Optimize from recorded profiles; do not hide consensus behavior behind
+  speculative abstractions.

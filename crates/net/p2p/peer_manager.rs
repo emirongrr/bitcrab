@@ -1,409 +1,405 @@
-use crate::p2p::addr_man::AddrMan;
-use crate::p2p::messages::Message;
-use std::collections::HashSet;
-use std::net::SocketAddr;
-use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
-use tokio::net::TcpStream;
-use tokio::time::{timeout, Duration};
+use bitcrab_common::types::{block::Block, hash::BlockHash};
+use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::sync::{Mutex, RwLock, Semaphore};
 use tracing::{debug, info, warn};
 
+const HEADER_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+
 use crate::p2p::{
-    actor::ActorRef,
-    codec::{decode_header, encode_header, verify_checksum},
-    dispatcher::DispatchMessage,
-    errors::P2pError,
-    message::Magic,
-    messages::{verack::Verack, version::Version, BitcoinMessage},
-    peer::PeerHandle,
+    messages::{
+        headers::Headers,
+        inv::{Inv, InvType},
+        Message, Pong,
+    },
+    net_types::ConnectionType,
+    node::{NodeHandle, NodeId},
     peer_table::PeerTable,
     sync::SyncManager,
 };
 
-use bitcrab_common::constants::MIN_PEER_PROTO_VERSION;
+/// Validation interface bridging Network layer to the Core validation logic (ChainstateManager).
+#[async_trait::async_trait]
+pub trait ValidationInterface: Send + Sync {
+    async fn process_header(
+        &self,
+        header: &bitcrab_common::types::block::BlockHeader,
+    ) -> Result<u32, String>;
+    async fn process_headers(
+        &self,
+        headers: &[bitcrab_common::types::block::BlockHeader],
+    ) -> Result<Vec<u32>, String> {
+        let mut heights = Vec::with_capacity(headers.len());
+        for header in headers {
+            heights.push(self.process_header(header).await?);
+        }
+        Ok(heights)
+    }
+    async fn process_block(
+        &self,
+        block: &bitcrab_common::types::block::Block,
+    ) -> Result<u32, String>;
 
-/// Connection timeout in seconds.
-const CONNECT_TIMEOUT_SECS: u64 = 10;
+    /// Build a block locator ending at genesis, rooted at `tip`.
+    ///
+    /// Bitcoin Core: `GetLocator()` in `src/chain.cpp`. The default returns the
+    /// degenerate single-hash locator so test doubles need not model an index;
+    /// real chain backends must override it or peers will restart every sync
+    /// from genesis whenever our tip is not on their chain.
+    fn get_block_locator(&self, tip: &bitcrab_common::types::hash::BlockHash) -> Vec<BlockHash> {
+        vec![*tip]
+    }
+}
 
-/// Handshake timeout in seconds.
-const HANDSHAKE_TIMEOUT_SECS: u64 = 30;
-
-/// Manages a set of active peer connections.
+/// Represents the logical application state of a connected Peer.
 ///
-/// Bitcoin Core: CConnman in src/net.h
+/// Bitcoin Core: `Peer` struct in net_processing.cpp
+pub struct Peer {
+    pub id: NodeId,
+    pub misbehavior_score: i32,
+    pub last_height: u32,
+    pub is_discouraged: bool,
+    pub conn_type: ConnectionType,
+}
+
+impl Peer {
+    pub fn new(id: NodeId, height: u32, conn_type: ConnectionType) -> Self {
+        Self {
+            id,
+            misbehavior_score: 0,
+            last_height: height,
+            is_discouraged: false,
+            conn_type,
+        }
+    }
+}
+
+enum MisbehaviorAction {
+    Record { score: i32 },
+    Discourage,
+}
+
+/// The Processing Layer for all Network messages.
+///
+/// Bitcoin Core: PeerManagerImpl in src/net_processing.cpp
+#[derive(Clone)]
 pub struct PeerManager {
-    pub table: PeerTable,
-    pub magic: Magic,
-    pub dispatcher: ActorRef<DispatchMessage>,
-    pub addr_man: Arc<Mutex<AddrMan>>,
-    our_nonces: Arc<Mutex<HashSet<u64>>>,
-    data_dir: Option<PathBuf>,
-    pub ban_list: Arc<Mutex<std::collections::HashMap<std::net::IpAddr, tokio::time::Instant>>>,
-    pub sync_manager: Option<SyncManager>,
+    peer_table: PeerTable,
+    validation: Arc<dyn ValidationInterface>,
+    pub sync_manager: Arc<SyncManager>,
+    peers: Arc<RwLock<HashMap<NodeId, Peer>>>,
+    /// Serializes header acceptance without blocking a peer's socket receive loop.
+    header_processing: Arc<Mutex<()>>,
+    /// Bounds concurrent block acceptance while keeping socket reads responsive.
+    block_processing: Arc<Semaphore>,
 }
 
 impl PeerManager {
-    pub fn new(magic: Magic, table: PeerTable, dispatcher: ActorRef<DispatchMessage>) -> Self {
+    pub fn new(
+        peer_table: PeerTable,
+        validation: Arc<dyn ValidationInterface>,
+        sync_manager: Arc<SyncManager>,
+    ) -> Self {
         Self {
-            table,
-            magic,
-            dispatcher,
-            addr_man: Arc::new(Mutex::new(AddrMan::new())),
-            our_nonces: Arc::new(Mutex::new(HashSet::new())),
-            data_dir: None,
-            ban_list: Arc::new(Mutex::new(std::collections::HashMap::new())),
-            sync_manager: None,
+            peer_table,
+            validation,
+            sync_manager,
+            peers: Arc::new(RwLock::new(HashMap::new())),
+            header_processing: Arc::new(Mutex::new(())),
+            block_processing: Arc::new(Semaphore::new(64)),
         }
     }
 
-    pub fn with_sync(mut self, sync: SyncManager) -> Self {
-        self.sync_manager = Some(sync);
-        self
+    /// Initializes peer state when a new connection is handshaked.
+    ///
+    /// Bitcoin Core: InitializeNode(CNode* pnode)
+    pub async fn initialize_node(&self, id: NodeId, height: u32, conn_type: ConnectionType) {
+        let mut map = self.peers.write().await;
+        map.insert(id, Peer::new(id, height, conn_type));
     }
 
-    /// Ban an IP Address for a specific duration.
-    pub fn ban(&self, ip: std::net::IpAddr, duration: tokio::time::Duration) {
-        self.ban_list
-            .lock()
-            .unwrap()
-            .insert(ip, tokio::time::Instant::now() + duration);
-        info!("Banned IP {} for {:?}", ip, duration);
+    /// Cleans up state when a node disconnects.
+    ///
+    /// Bitcoin Core: FinalizeNode(const CNode& node)
+    pub async fn finalize_node(&self, id: &NodeId) {
+        {
+            let mut map = self.peers.write().await;
+            map.remove(id);
+        }
+        self.peer_table.remove_peer(*id).await;
+        self.sync_manager.on_peer_disconnect(*id);
     }
 
-    /// Check if an IP address is currently banned.
-    pub fn is_banned(&self, ip: &std::net::IpAddr) -> bool {
-        let mut map = self.ban_list.lock().unwrap();
-        if let Some(until) = map.get(ip) {
-            if until > &tokio::time::Instant::now() {
-                return true;
+    /// Handle misbehaving nodes.
+    ///
+    /// Bitcoin Core: Misbehaving(const NodeId pnode, const int howmuch, const std::string& message)
+    pub async fn misbehaving(&self, id: &NodeId, how_much: i32, message: &str) {
+        let msg_suffix = if message.is_empty() {
+            String::new()
+        } else {
+            format!(": {}", message)
+        };
+
+        let action = {
+            let mut map = self.peers.write().await;
+            let Some(peer) = map.get_mut(id) else {
+                return;
+            };
+
+            let previous_score = peer.misbehavior_score;
+            peer.misbehavior_score += how_much;
+
+            if peer.misbehavior_score >= 100 && !peer.is_discouraged {
+                warn!(
+                    "[peer_manager] Misbehaving: peer={} ({} -> {}) DISCOURAGEMENT THRESHOLD EXCEEDED{}",
+                    id, previous_score, peer.misbehavior_score, msg_suffix
+                );
+                peer.is_discouraged = true;
+                MisbehaviorAction::Discourage
             } else {
-                map.remove(ip);
+                debug!(
+                    "[peer_manager] Misbehaving: peer={} ({} -> {}){}",
+                    id, previous_score, peer.misbehavior_score, msg_suffix
+                );
+                MisbehaviorAction::Record { score: how_much }
             }
-        }
-        false
-    }
+        };
 
-    pub fn insert_peer(&self, _addr: SocketAddr) {
-        // Obsolete: PeerActor now notifies PeerTable automatically.
-    }
-
-    pub fn remove_peer(&self, _addr: &SocketAddr) {
-        // Obsolete: PeerActor now notifies PeerTable automatically.
-    }
-    pub fn with_data_dir(mut self, dir: PathBuf) -> Self {
-        let peers_file = dir.join("peers.dat");
-        self.addr_man = Arc::new(Mutex::new(AddrMan::load_or_default(&peers_file)));
-        self.data_dir = Some(dir);
-        self
-    }
-
-    /// Save peer table to disk.
-    pub fn save_peers(&self) {
-        if let Some(ref dir) = self.data_dir {
-            let path = dir.join("peers.dat");
-            if let Err(e) = self.addr_man.lock().unwrap().save(&path) {
-                warn!("failed to save peer table: {}", e);
+        match action {
+            MisbehaviorAction::Record { score } => {
+                self.peer_table.record_misbehavior(*id, score).await;
+            }
+            MisbehaviorAction::Discourage => {
+                self.peer_table.record_critical_failure(*id).await;
             }
         }
     }
 
-    /// Seed the peer table from DNS.
-    ///
-    /// Bitcoin Core: CConnman::ThreadDNSAddressSeed() in src/net.cpp
-    pub async fn seed_from_dns(&self, seeds: &[&str], port: u16) {
-        use std::net::ToSocketAddrs;
-        for seed in seeds {
-            let host = format!("{}:{}", seed, port);
-            match tokio::task::spawn_blocking(move || {
-                host.to_socket_addrs().map(|i| i.collect::<Vec<_>>())
-            })
+    pub async fn is_peer_discouraged(&self, id: &NodeId) -> bool {
+        self.peers
+            .read()
             .await
-            {
-                Ok(Ok(addrs)) => {
-                    let count = addrs.len();
-                    self.addr_man
-                        .lock()
-                        .unwrap()
-                        .add_many(addrs, "0.0.0.0:0".parse().unwrap());
-                    debug!("DNS seed {} → {} addresses", seed, count);
-                }
-                _ => debug!("DNS seed {} failed", seed),
-            }
-        }
+            .get(id)
+            .map(|peer| peer.is_discouraged)
+            .unwrap_or(false)
     }
 
-    /// Connect to a peer address and complete the Bitcoin handshake.
+    /// Central message processing router.
     ///
-    /// On success the peer is added to the active peer list.
-    ///
-    /// Bitcoin Core: CConnman::OpenNetworkConnection() in src/net.cpp
-    /// Connect to a specific address.
-    pub async fn connect(&self, addr: &str) -> Result<PeerHandle, P2pError> {
-        let socket_addr = resolve(addr)?;
-        self.connect_addr(socket_addr).await
-    }
-
-    pub async fn connect_a(&self, addr: SocketAddr) -> Result<PeerHandle, P2pError> {
-        self.connect_addr(addr).await
-    }
-
-    pub async fn connect_best(&self) -> Result<PeerHandle, P2pError> {
-        let addr = self
-            .addr_man
-            .lock()
-            .unwrap()
-            .select_best(&[]) // TODO: provide active list from PeerTable
-            .ok_or(P2pError::ConnectionFailed {
-                addr: "none".into(),
-                reason: "no connectable peers in table".into(),
-            })?;
-        self.connect_addr(addr).await
-    }
-
-    pub async fn connect_addr(&self, socket_addr: SocketAddr) -> Result<PeerHandle, P2pError> {
-        if self.is_banned(&socket_addr.ip()) {
-            return Err(P2pError::Banned);
-        }
-
-        info!("connecting to {}", socket_addr);
-
-        let stream = timeout(
-            Duration::from_secs(CONNECT_TIMEOUT_SECS),
-            TcpStream::connect(socket_addr),
-        )
-        .await
-        .map_err(|_| P2pError::HandshakeTimeout {
-            secs: CONNECT_TIMEOUT_SECS,
-        })?
-        .map_err(|e| P2pError::ConnectionFailed {
-            addr: socket_addr.to_string(),
-            reason: e.to_string(),
-        })?;
-
-        info!("TCP connected to {}", socket_addr);
-
-        match self.handshake(stream, socket_addr, false).await {
-            Ok(handle) => {
-                self.addr_man.lock().unwrap().record_success(socket_addr);
-                self.table
-                    .add_peer(handle.clone())
-                    .await
-                    .map_err(|_| P2pError::ConnectionClosed)?;
-                
-                // Notify sync manager if present
-                if let Some(ref sync) = self.sync_manager {
-                    let h = handle.clone();
-                    let s = sync.clone();
-                    tokio::spawn(async move {
-                        s.notify_peer_connected(h).await;
-                    });
-                }
-
-                self.save_peers();
-                Ok(handle)
+    /// Bitcoin Core: ProcessMessage(CNode& pfrom, const std::string& msg_type, ...)
+    pub async fn process_message(&self, node_id: NodeId, handle: NodeHandle, msg: Message) {
+        match msg {
+            Message::Headers(h) => {
+                // Bitcoin Core keeps socket I/O independent from validation work.
+                // Header acceptance remains serialized, but the peer receive loop
+                // can continue reading blocks while the batch is validated.
+                let peer_manager = self.clone();
+                tokio::spawn(async move {
+                    peer_manager.on_headers(node_id, h, handle).await;
+                });
             }
-            Err(e) => {
-                self.addr_man.lock().unwrap().record_failure(socket_addr);
-                self.save_peers();
-                Err(e)
+            Message::Block(b) => {
+                let peer_manager = self.clone();
+                tokio::spawn(async move {
+                    let Ok(_permit) = peer_manager.block_processing.clone().acquire_owned().await
+                    else {
+                        return;
+                    };
+                    peer_manager.on_block(node_id, b).await;
+                });
             }
+            Message::Inv(i) => self.on_inv(node_id, i).await,
+            Message::Ping(ping) => self.on_ping(handle, ping.nonce).await,
+            Message::NotFound(i) => self.on_not_found(node_id, i).await,
+            _ => debug!(
+                "[peer_manager] unhandled message type from {}: {:?}",
+                node_id,
+                msg.command()
+            ),
         }
     }
 
-    /// Run the version/verack handshake on an established stream.
-    ///
-    /// Bitcoin Core: version/verack exchange in src/net_processing.cpp
-    /// ProcessMessage() handlers for "version" and "verack".
+    async fn on_headers(&self, peer_id: NodeId, headers: Headers, node: NodeHandle) {
+        let _header_guard = self.header_processing.lock().await;
+        self.sync_manager.finish_header_request(peer_id);
 
-    pub async fn handshake(
-        &self,
-        mut stream: TcpStream,
-        addr: SocketAddr,
-        is_inbound: bool,
-    ) -> Result<PeerHandle, P2pError> {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-        let nonce = make_nonce();
-        self.our_nonces.lock().unwrap().insert(nonce);
-
-        let our_version = Version::our_version_with_nonce(nonce);
-        let payload = our_version.encode();
-        let header = encode_header(self.magic, &Version::COMMAND, &payload);
-
-        if !is_inbound {
-            stream.write_all(&header).await?;
-            stream.write_all(&payload).await?;
-            debug!("[{}] sent version nonce={}", addr, nonce);
+        if headers.headers.is_empty() {
+            return;
         }
 
-        let mut peer_version = 0i32;
-        let mut peer_agent = String::new();
-        let mut peer_height = 0i32;
-        let mut peer_services = 0u64;
-        let mut got_version = false;
-        let mut got_verack = false;
-
-        // Copy nonces to avoid borrow conflict in async block if not using shared reference directly.
-        let our_nonces_snapshot: std::collections::HashSet<u64> =
-            self.our_nonces.lock().unwrap().clone();
-        let magic = self.magic;
-
-        let result = timeout(Duration::from_secs(HANDSHAKE_TIMEOUT_SECS), async {
-            loop {
-                let mut hdr_buf = [0u8; 24];
-                stream
-                    .read_exact(&mut hdr_buf)
-                    .await
-                    .map_err(|_| P2pError::ConnectionClosed)?;
-
-                let msg_hdr = match decode_header(&hdr_buf, magic) {
-                    Ok(hdr) => hdr,
-                    Err(e) => {
-                        if let crate::p2p::errors::P2pError::WrongMagic { expected, actual } = e {
-                            warn!(
-                                "[{}] Magic mismatch! Expected: {:08x}, Received: {:08x}",
-                                addr, expected, actual
-                            );
-                        }
-                        return Err(e);
-                    }
-                };
-                debug!("[{}] received {:?}", addr, msg_hdr.command);
-
-                let mut payload_buf = vec![0u8; msg_hdr.length as usize];
-                if msg_hdr.length > 0 {
-                    stream
-                        .read_exact(&mut payload_buf)
-                        .await
-                        .map_err(|_| P2pError::ConnectionClosed)?;
-                }
-
-                verify_checksum(&msg_hdr, &payload_buf)?;
-
-                match Message::decode(&msg_hdr.command, &payload_buf)
-                    .map_err(|e| P2pError::DecodeError(e.to_string()))?
-                {
-                    Message::Version(v) => {
-                        // Self-connection detection.
-                        if our_nonces_snapshot.contains(&v.nonce) {
-                            return Err(P2pError::SelfConnection);
-                        }
-
-                        if v.version < MIN_PEER_PROTO_VERSION as i32 {
-                            return Err(P2pError::PeerVersionTooOld {
-                                version: v.version,
-                                minimum: MIN_PEER_PROTO_VERSION as i32,
-                            });
-                        }
-
-                        peer_version = v.version;
-                        peer_agent = v.user_agent.clone();
-                        peer_height = v.start_height;
-                        peer_services = v.services;
-
-                        info!(
-                            "[{}] peer version={} agent='{}' height={}",
-                            addr, peer_version, peer_agent, peer_height
-                        );
-
-                        if is_inbound {
-                            stream.write_all(&header).await?;
-                            stream.write_all(&payload).await?;
-                            debug!("[{}] sent version nonce={} (inbound reply)", addr, nonce);
-                        }
-
-                        let verack_payload = Verack.encode();
-                        let verack_header = encode_header(magic, &Verack::COMMAND, &verack_payload);
-                        stream.write_all(&verack_header).await?;
-                        debug!("[{}] sent verack", addr);
-                        got_version = true;
-                    }
-
-                    Message::Verack(_) => {
-                        got_verack = true;
-                    }
-
-                    other => {
-                        debug!("[{}] ignoring {} during handshake", addr, other);
-                    }
-                }
-
-                if got_version && got_verack {
-                    return Ok(());
-                }
-            }
-        })
-        .await
-        .map_err(|_| P2pError::HandshakeTimeout {
-            secs: HANDSHAKE_TIMEOUT_SECS,
-        })?;
-
-        self.our_nonces.lock().unwrap().remove(&nonce);
-        result?;
-
-        info!("[{}] handshake complete", addr);
-
-        let handle = PeerHandle::start(
-            addr,
-            self.magic,
-            stream,
-            peer_version,
-            peer_agent,
-            peer_height,
-            peer_services,
-            Arc::clone(&self.ban_list),
-            self.table.clone(),
-            self.dispatcher.clone(),
+        info!(
+            "[peer_manager] received {} headers from {}",
+            headers.headers.len(),
+            peer_id
         );
 
-        if !is_inbound {
-            debug!("[{}] requesting peers (getaddr) after handshake", addr);
-            let _ = handle
-                .send(Message::GetAddr(crate::p2p::messages::addr::GetAddr))
-                .await;
+        let heights = match self.validation.process_headers(&headers.headers).await {
+            Ok(heights) => heights,
+            Err(e) => {
+                warn!(
+                    "[peer_manager] invalid header batch from {}: {}",
+                    peer_id, e
+                );
+                self.misbehaving(&peer_id, 20, "non-connecting headers")
+                    .await;
+                return;
+            }
+        };
+
+        let processed_in_batch = heights.len();
+
+        // `process_headers` may accept only a prefix of the batch (a gap in the
+        // chain truncates it). Pair the hash with its own height rather than
+        // taking the last of each list independently, or a truncated batch
+        // would advance the tip to a header we never accepted.
+        let Some((last_header, last_height)) = headers
+            .headers
+            .iter()
+            .zip(heights.iter().copied())
+            .next_back()
+        else {
+            return;
+        };
+        let last_hash = last_header.block_hash();
+        let last_time = last_header.time as u64;
+
+        if last_hash != BlockHash::ZERO {
+            self.sync_manager
+                .update_headers_tip(last_hash, last_height, last_time);
+            self.sync_manager.notify_work_available();
+            info!(
+                "[peer_manager] Header tip advanced: height {} from {} (Batch of {})",
+                last_height, peer_id, processed_in_batch
+            );
         }
 
-        Ok(handle)
+        if headers.headers.len() == 2000 {
+            debug!(
+                "[peer_manager] full batch received, requesting next from {}",
+                peer_id
+            );
+            if !self.sync_manager.try_begin_header_request(
+                peer_id,
+                last_hash,
+                last_height,
+                HEADER_REQUEST_TIMEOUT,
+            ) {
+                return;
+            }
+            let locator = self.validation.get_block_locator(&last_hash);
+            if node
+                .send(Message::GetHeaders(
+                    crate::p2p::messages::getheaders::GetHeaders {
+                        version: 70015,
+                        locator,
+                        stop_hash: BlockHash::ZERO,
+                    },
+                ))
+                .await
+                .is_err()
+            {
+                self.sync_manager.finish_header_request(peer_id);
+            }
+        }
     }
 
-    pub fn peer_count(&self) -> usize {
-        // Handled via actor call now. Returning 0 or similar if non-async access needed,
-        // but better to move caller to async.
-        0
+    async fn on_block(&self, peer_id: NodeId, block: Block) {
+        let hash = block.header.block_hash();
+        debug!("[peer_manager] received block {} from {}", hash, peer_id);
+
+        match self.validation.process_block(&block).await {
+            Ok(height) => {
+                debug!(
+                    "Successfully processed block: {} at height {}",
+                    hash, height
+                );
+                self.sync_manager.halve_stalling_timeout();
+                self.sync_manager.mark_block_received(&hash, peer_id);
+            }
+            Err(e) => {
+                warn!("[peer_manager] invalid block from {}: {}", peer_id, e);
+                self.sync_manager.mark_block_received(&hash, peer_id);
+                self.misbehaving(&peer_id, 100, "invalid block data").await;
+            }
+        }
     }
 
-    pub fn active_addrs(&self) -> Vec<SocketAddr> {
-        Vec::new()
+    async fn on_not_found(&self, peer_id: NodeId, not_found: Inv) {
+        warn!(
+            "[peer_manager] {} items not found by node {}",
+            not_found.inventory.len(),
+            peer_id
+        );
+
+        for item in not_found.inventory {
+            if item.inv_type == InvType::Block || item.inv_type == InvType::WitnessBlock {
+                let block_hash = BlockHash::from_bytes(item.hash);
+                debug!(
+                    "[peer_manager] block {} not found by {}, releasing back to pool",
+                    block_hash, peer_id
+                );
+                self.sync_manager.mark_block_received(&block_hash, peer_id);
+            }
+        }
     }
 
-    pub fn prune_disconnected(&self) {
-        // Obsolete.
+    async fn on_inv(&self, peer_id: NodeId, inv: Inv) {
+        debug!(
+            "[peer_manager] received inv with {} items from {}",
+            inv.inventory.len(),
+            peer_id
+        );
+
+        let mut block_hashes = Vec::new();
+        for item in inv.inventory {
+            if item.inv_type == InvType::Block {
+                block_hashes.push(item.hash);
+            }
+        }
+
+        if !block_hashes.is_empty() {
+            info!(
+                "[peer_manager] new blocks announced, triggering get_data for {} items",
+                block_hashes.len()
+            );
+        }
     }
 
-    pub fn disconnect_all(&self) {
-        // TODO: trigger via PeerTable.
+    async fn on_ping(&self, node: NodeHandle, nonce: u64) {
+        debug!(
+            "[peer_manager] responding to ping from {} with nonce {}",
+            node.addr, nonce
+        );
+        let _ = node.send(Message::Pong(Pong { nonce })).await;
     }
-}
 
-fn resolve(addr: &str) -> Result<SocketAddr, P2pError> {
-    addr.parse().or_else(|_| {
-        use std::net::ToSocketAddrs;
-        addr.to_socket_addrs()
-            .map_err(|e| P2pError::ConnectionFailed {
-                addr: addr.to_string(),
-                reason: e.to_string(),
-            })?
-            .next()
-            .ok_or(P2pError::ConnectionFailed {
-                addr: addr.to_string(),
-                reason: "DNS resolution returned no addresses".into(),
-            })
-    })
-}
-
-/// Cryptographically random nonce for self-connection detection.
-///
-/// Bitcoin Core: GetRand(std::numeric_limits<uint64_t>::max()) in src/net.cpp
-fn make_nonce() -> u64 {
-    rand::random()
+    /// Trigger Initial Block Download sync with a specific peer.
+    pub async fn sync_with_peer(&self, node: NodeHandle) {
+        if self.sync_manager.is_ibd() {
+            info!("[peer_manager] starting header sync with {}", node.addr);
+            let (tip_hash, tip_height) = self.sync_manager.get_headers_tip();
+            if !self.sync_manager.try_begin_header_request(
+                node.addr,
+                tip_hash,
+                tip_height,
+                HEADER_REQUEST_TIMEOUT,
+            ) {
+                return;
+            }
+            let locator = self.validation.get_block_locator(&tip_hash);
+            if node
+                .send(Message::GetHeaders(
+                    crate::p2p::messages::getheaders::GetHeaders {
+                        version: 70015,
+                        locator,
+                        stop_hash: BlockHash::ZERO,
+                    },
+                ))
+                .await
+                .is_err()
+            {
+                self.sync_manager.finish_header_request(node.addr);
+            }
+        }
+    }
 }

@@ -53,6 +53,7 @@ pub enum Message {
     Block(bitcrab_common::types::block::Block),
     Addr(Addr),
     GetAddr(GetAddr),
+    NotFound(Inv),
     /// Received a known command we don't handle yet.
     Ignored(Command),
     /// Received an unknown command.
@@ -60,7 +61,6 @@ pub enum Message {
 }
 
 impl Message {
-    /// Decode a message from its command and raw payload.
     /// Decode a message from its command and raw payload.
     pub fn decode(command: &Command, payload: &[u8]) -> Result<Self, DecodeError> {
         match command {
@@ -75,6 +75,8 @@ impl Message {
             Command::Block => Ok(Self::Block(Block::decode(payload)?)),
             Command::Addr => Ok(Self::Addr(Addr::decode(payload)?)),
             Command::GetAddr => Ok(Self::GetAddr(GetAddr::decode(payload)?)),
+            Command::NotFound => Ok(Self::NotFound(Inv::decode(payload)?)),
+            Command::Unknown(name) => Ok(Self::Unknown(name.clone())),
             other => Ok(Self::Ignored(other.clone())),
         }
     }
@@ -92,6 +94,7 @@ impl Message {
             Self::Block(v) => <Block as BitcoinMessage>::encode(v),
             Self::Addr(v) => v.encode(),
             Self::GetAddr(v) => v.encode(),
+            Self::NotFound(v) => v.encode(),
             _ => vec![],
         }
     }
@@ -109,6 +112,7 @@ impl Message {
             Self::Block(_) => Command::Block,
             Self::Addr(_) => Command::Addr,
             Self::GetAddr(_) => Command::GetAddr,
+            Self::NotFound(_) => Command::NotFound,
             Self::Ignored(c) => c.clone(),
             Self::Unknown(s) => Command::Unknown(s.clone()),
         }

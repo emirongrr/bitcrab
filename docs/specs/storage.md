@@ -7,7 +7,7 @@ Bitcrab's storage engine is designed for high-performance blockchain persistence
 Bitcrab implements the standard Bitcoin Core storage hierarchy, which consists of two main components: flat-file block storage and a keyed metadata index.
 
 ### 1. Raw Block Storage (`blk*.dat`)
-Blocks are stored in append-only files in the project's data directory. 
+Blocks are stored in append-only files in the selected data directory.
 - **File Format**: Linear sequences of block records.
 - **Record Structure**:
     - `[Magic (4 bytes)]`: Network identifier (e.g., `0xF9BEB4D9` for Mainnet, `0x0A03CF40` for Signet).
@@ -18,7 +18,8 @@ Blocks are stored in append-only files in the project's data directory.
 A Key-Value database (LevelDB in Core, RocksDB in Bitcrab) that maps headers to their physical location and tracks validation state.
 - **Key Prefixes**:
     - `b` + `[32-byte hash]`: Block index entry (height, status, file position).
-    - `C` + `[outpoint]`: Coin (UTXO) record.
+    - Coin records live in Bitcrab's UTXO table; the physical schema is not
+      byte-compatible with Bitcoin Core chainstate.
     - `B`: The hash of the current best chain tip.
     - `l`: The file number of the last `blk*.dat` file written.
 
@@ -53,5 +54,13 @@ graph LR
 ## 🛠️ Performance Optimizations
 
 1.  **RocksDB Integration**: I replaced the standard LevelDB with RocksDB to leverage its superior multi-threaded performance and compression support in Rust.
-2.  **Height-to-Hash Index**: In addition to standard Core prefixes, I implemented an `H` prefix (`H` + `BigEndian(Height)`) to enable instant block lookups by height for the JSON-RPC interface.
+2.  **Height-to-Hash Index**: An `H` prefix (`H` + `BigEndian(Height)`) enables
+instant block lookups by height for JSON-RPC.
 3.  **FlatFilePos Manager**: I built a dedicated rotation manager that handles file pre-allocation and `fsync` strategies, ensuring that Bitcrab remains resilient against power failures and system crashes.
+
+## Data Directory Safety
+
+The default Bitcrab location is the operating-system data directory under
+`bitcrab/<chain>`. Its layout follows Core's separation of flat block files
+from keyed metadata, but Bitcrab must never open Bitcoin Core's own data
+directory because the database schemas are incompatible.

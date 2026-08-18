@@ -8,6 +8,7 @@
 use super::BitcoinMessage;
 use crate::p2p::message::Command;
 use bitcrab_common::{
+    constants::MAX_HEADERS_PER_MSG,
     types::block::BlockHeader,
     wire::{encode::VarInt, error::DecodeError, Decoder, Encoder},
 };
@@ -35,14 +36,27 @@ impl BitcoinMessage for Headers {
         }
         let dec = Decoder::new(payload);
         let (count, mut dec) = dec.read_varint("header_count")?;
+        if count as usize > MAX_HEADERS_PER_MSG {
+            return Err(DecodeError::AllocationTooLarge {
+                field: "header_count",
+                len: count,
+                limit: MAX_HEADERS_PER_MSG,
+            });
+        }
         let mut headers = Vec::with_capacity(count as usize);
         for _ in 0..count {
             let (raw, d) = dec.read_array::<80>("header")?;
-            let (_tx_count, d) = d.decode_field::<u8>("tx_count")?;
+            let (tx_count, d) = d.decode_field::<u8>("tx_count")?;
+            if tx_count != 0 {
+                return Err(DecodeError::InvalidValue {
+                    field: "tx_count",
+                    value: tx_count as u64,
+                });
+            }
             headers.push(BlockHeader::deserialize(&raw));
             dec = d;
         }
-        dec.finish_unchecked();
+        dec.finish("headers")?;
         Ok(Self { headers })
     }
 }
